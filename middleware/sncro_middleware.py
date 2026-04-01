@@ -65,12 +65,9 @@ class SncroMiddleware(BaseHTTPMiddleware):
 sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 
 
-@sncro_routes.get("/enable", response_class=HTMLResponse)
-async def sncro_enable(request: Request):
-    """Enable sncro for this browser session."""
-    existing = request.cookies.get(SNCRO_COOKIE)
-    key = existing or secrets.token_hex(4)  # 8 hex chars
-
+@sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
+async def sncro_enable(key: str):
+    """Enable sncro with a key from Claude's create_session tool."""
     html = f"""<!DOCTYPE html>
 <html><head><title>sncro enabled</title>
 <style>
@@ -82,10 +79,8 @@ async def sncro_enable(request: Request):
 </style></head>
 <body>
   <h2>sncro is active</h2>
-  <p>Your session key:</p>
-  <div class="key">{key}</div>
-  <p>Tell Claude Code:<br><code>sncro key is {key}</code></p>
-  <p class="hint">All HTML pages in this session will now include the sncro agent.<br>
+  <p>Session key: <span class="key">{key}</span></p>
+  <p class="hint">Claude Code is now connected to this browser session.<br>
   <a href="/sncro/disable">Disable</a></p>
 </body></html>"""
 

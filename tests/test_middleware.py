@@ -28,21 +28,12 @@ client = TestClient(make_app())
 
 
 class TestEnableDisable:
-    def test_enable_returns_key(self):
-        resp = client.get("/sncro/enable")
+    def test_enable_with_key(self):
+        resp = client.get("/sncro/enable/abc12345")
         assert resp.status_code == 200
         assert "sncro_key" in resp.cookies
-        assert len(resp.cookies["sncro_key"]) == 8
-        assert resp.cookies["sncro_key"] in resp.text
-
-    def test_enable_preserves_existing_key(self):
-        # First enable
-        resp1 = client.get("/sncro/enable")
-        key1 = resp1.cookies["sncro_key"]
-
-        # Second enable with cookie set
-        resp2 = client.get("/sncro/enable", cookies={"sncro_key": key1})
-        assert key1 in resp2.text
+        assert resp.cookies["sncro_key"] == "abc12345"
+        assert "abc12345" in resp.text
 
     def test_disable_clears_cookie(self):
         resp = client.get("/sncro/disable")
@@ -65,3 +56,12 @@ class TestInjection:
         resp = client.get("/api/data", cookies={"sncro_key": "abc12345"})
         assert resp.json() == {"data": 1}
         assert "agent.js" not in resp.text
+
+    def test_injection_does_not_corrupt_content_length(self):
+        """Injected script makes body larger; Content-Length must match."""
+        resp = client.get("/", cookies={"sncro_key": "abc12345"})
+        assert resp.status_code == 200
+        body_len = len(resp.content)
+        content_length = resp.headers.get("content-length")
+        if content_length is not None:
+            assert int(content_length) == body_len

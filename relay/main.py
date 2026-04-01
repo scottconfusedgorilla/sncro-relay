@@ -1,6 +1,7 @@
 """sncro relay — keyed long-poll rendezvous server + MCP server."""
 
 import asyncio
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -55,11 +56,29 @@ mcp = FastMCP("sncro", transport_security=TransportSecuritySettings(
     allowed_origins=["https://sncro-production.up.railway.app"],
 ), instructions="""
 SNCRO gives you live visibility into the user's browser.
-Use get_console_logs to check for errors and debug output.
-Use query_element to inspect specific DOM elements (bounding rects, styles, attributes).
-Use get_page_snapshot for a high-level page overview.
-The user will give you a session key — pass it to every tool call.
+
+To start a session:
+1. Call create_session to get a session key
+2. Tell the user to paste this URL in their browser: {app_url}/sncro/enable/{key}
+3. Once enabled, use the key with get_console_logs, query_element, query_all, get_page_snapshot
+
+You should proactively use SNCRO when debugging CSS, layout, or JS issues
+in the user's browser rather than asking for screenshots.
 """)
+
+
+@mcp.tool()
+async def create_session() -> dict:
+    """Create a new sncro session. Returns a session key.
+
+    After calling this, tell the user to paste this URL in their browser:
+      {their_app_url}/sncro/enable/{key}
+
+    Then use the returned key with all other sncro tools.
+    """
+    key = secrets.token_hex(4)  # 8 hex chars
+    store.ensure_session(key)
+    return {"key": key, "instructions": f"Tell the user to paste this URL in their browser: <app_url>/sncro/enable/{key}"}
 
 
 async def _send_browser_request(key: str, tool: str, params: dict | None = None) -> dict:
