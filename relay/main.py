@@ -150,7 +150,7 @@ async def check_session(key: str) -> dict:
 
 # Mount MCP server via Streamable HTTP transport
 _mcp_app = mcp.streamable_http_app()
-app.mount("/mcp", _mcp_app)
+app.mount("/tools", _mcp_app)
 
 
 # =============================================================================
