@@ -1,13 +1,15 @@
-"""sncro relay — keyed long-poll rendezvous server."""
+"""sncro relay — keyed long-poll rendezvous server + MCP server."""
 
 import asyncio
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
 from relay.store import SessionStore
@@ -26,7 +28,7 @@ async def lifespan(app: FastAPI):
     cleanup_task.cancel()
 
 
-app = FastAPI(title="sncro relay", lifespan=lifespan)
+app = FastAPI(title="sncro", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,6 +41,119 @@ static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+
+# =============================================================================
+# MCP Server — mounted at /mcp
+# =============================================================================
+
+mcp = FastMCP("sncro", instructions="""
+SNCRO gives you live visibility into the user's browser.
+Use get_console_logs to check for errors and debug output.
+Use query_element to inspect specific DOM elements (bounding rects, styles, attributes).
+Use get_page_snapshot for a high-level page overview.
+The user will give you a session key — pass it to every tool call.
+""")
+
+
+async def _send_browser_request(key: str, tool: str, params: dict | None = None) -> dict:
+    """Post a request to the store and wait for the browser's response."""
+    store.ensure_session(key)
+    request_id = uuid.uuid4().hex[:12]
+    store.add_request(key, {
+        "request_id": request_id,
+        "tool": tool,
+        "params": params or {},
+    })
+
+    # Wait for browser to respond
+    deadline = time.time() + LONG_POLL_TIMEOUT
+    while time.time() < deadline:
+        resp = store.pop_response(key, request_id)
+        if resp is not None:
+            return resp
+        await asyncio.sleep(0.5)
+    return {"error": "Browser did not respond in time. Is the page open with sncro enabled?"}
+
+
+@mcp.tool()
+async def get_console_logs(key: str) -> dict:
+    """Get recent console logs and errors from the browser.
+
+    Returns the latest console output and any JavaScript errors,
+    including unhandled exceptions and promise rejections.
+    """
+    store.ensure_session(key)
+    snapshot = store.get_snapshot(key)
+    if snapshot is None:
+        return {"error": "No data yet. Is the browser page open with sncro enabled?"}
+    return snapshot
+
+
+@mcp.tool()
+async def query_element(key: str, selector: str, styles: list[str] | None = None) -> dict:
+    """Query a DOM element by CSS selector.
+
+    Returns bounding rect, attributes, computed styles, inner text,
+    and child count. Use this to debug layout, positioning, and
+    visibility issues.
+
+    Args:
+        key: The sncro session key
+        selector: CSS selector (e.g. "#photo-wrap", ".toolbar > button:first-child")
+        styles: Optional list of CSS properties to read (e.g. ["transform", "width", "display"])
+    """
+    return await _send_browser_request(key, "query_element", {
+        "selector": selector,
+        "styles": styles or [],
+    })
+
+
+@mcp.tool()
+async def query_all(key: str, selector: str, limit: int = 20) -> dict:
+    """Query all matching DOM elements by CSS selector.
+
+    Returns a summary of each matching element (tag, id, class,
+    bounding rect, inner text). Useful for checking lists, grids,
+    or multiple instances of a component.
+
+    Args:
+        key: The sncro session key
+        selector: CSS selector
+        limit: Max elements to return (default 20)
+    """
+    return await _send_browser_request(key, "query_all", {
+        "selector": selector,
+        "limit": limit,
+    })
+
+
+@mcp.tool()
+async def get_page_snapshot(key: str) -> dict:
+    """Get a high-level snapshot of the current page.
+
+    Returns URL, title, viewport dimensions, scroll position,
+    top-level DOM structure, recent console logs, and recent errors.
+    """
+    return await _send_browser_request(key, "get_page_snapshot", {})
+
+
+@mcp.tool()
+async def check_session(key: str) -> dict:
+    """Check if a sncro session is active.
+
+    Use this to verify the browser has sncro enabled before
+    making other queries.
+    """
+    return {"active": store.has_session(key)}
+
+
+# Mount MCP server via SSE transport
+app.mount("/mcp", mcp.sse_app())
+
+
+# =============================================================================
+# Relay HTTP API — used by agent.js
+# =============================================================================
 
 # --- Models ---
 
