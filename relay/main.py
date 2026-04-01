@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
+from mcp.server.transport_security import TransportSecuritySettings
+
 from relay.store import SessionStore
 
 KEY_EXPIRY_HOURS = 4
@@ -47,7 +49,11 @@ if static_dir.exists():
 # MCP Server — mounted at /mcp
 # =============================================================================
 
-mcp = FastMCP("sncro", instructions="""
+mcp = FastMCP("sncro", transport_security=TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["sncro-production.up.railway.app", "localhost:*", "127.0.0.1:*"],
+    allowed_origins=["https://sncro-production.up.railway.app"],
+), instructions="""
 SNCRO gives you live visibility into the user's browser.
 Use get_console_logs to check for errors and debug output.
 Use query_element to inspect specific DOM elements (bounding rects, styles, attributes).
