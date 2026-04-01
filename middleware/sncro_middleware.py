@@ -50,10 +50,12 @@ class SncroMiddleware(BaseHTTPMiddleware):
         else:
             body_str += tag
 
+        new_headers = {k: v for k, v in response.headers.items()
+                       if k.lower() != "content-length"}
         return Response(
             content=body_str,
             status_code=response.status_code,
-            headers=dict(response.headers),
+            headers=new_headers,
             media_type="text/html",
         )
 
