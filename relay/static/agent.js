@@ -1,0 +1,234 @@
+/**
+ * sncro agent — injected into pages to capture DOM/console state
+ * and relay it to sncro.net for Claude Code to read via MCP.
+ *
+ * Usage: <script src="https://sncro.net/static/agent.js" data-key="YOUR_KEY"></script>
+ * Or injected by the sncro FastAPI middleware.
+ */
+(function () {
+  "use strict";
+
+  const script = document.currentScript;
+  const RELAY = script?.getAttribute("data-relay") || script?.src.replace(/\/static\/agent\.js.*/, "") || "";
+  const KEY = script?.getAttribute("data-key") || "";
+
+  if (!KEY) {
+    console.warn("[sncro] No session key provided. Agent disabled.");
+    return;
+  }
+
+  const POLL_INTERVAL = 2000; // ms between polls for pending requests
+  const SNAPSHOT_INTERVAL = 5000; // ms between baseline snapshot pushes
+  const MAX_LOG_ENTRIES = 200;
+
+  // --- Console capture ---
+
+  const logs = [];
+  const errors = [];
+
+  function captureConsole() {
+    const original = {};
+    ["log", "warn", "error", "info", "debug"].forEach((level) => {
+      original[level] = console[level];
+      console[level] = function (...args) {
+        logs.push({
+          level,
+          message: args.map(String).join(" "),
+          timestamp: Date.now(),
+        });
+        if (logs.length > MAX_LOG_ENTRIES) logs.shift();
+        original[level].apply(console, args);
+      };
+    });
+  }
+
+  function captureErrors() {
+    window.addEventListener("error", (e) => {
+      errors.push({
+        message: e.message,
+        source: e.filename,
+        line: e.lineno,
+        col: e.colno,
+        stack: e.error?.stack || "",
+        timestamp: Date.now(),
+      });
+      if (errors.length > MAX_LOG_ENTRIES) errors.shift();
+    });
+
+    window.addEventListener("unhandledrejection", (e) => {
+      errors.push({
+        message: String(e.reason),
+        source: "unhandledrejection",
+        stack: e.reason?.stack || "",
+        timestamp: Date.now(),
+      });
+      if (errors.length > MAX_LOG_ENTRIES) errors.shift();
+    });
+  }
+
+  // --- Snapshot (baseline push) ---
+
+  async function pushSnapshot() {
+    try {
+      await fetch(`${RELAY}/session/${KEY}/snapshot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          console: logs.slice(-50),
+          errors: errors.slice(-20),
+          url: location.href,
+          title: document.title,
+          timestamp: Date.now(),
+        }),
+      });
+    } catch (_) {
+      // Silent fail — don't pollute the console we're capturing
+    }
+  }
+
+  // --- Request handlers ---
+
+  const handlers = {
+    query_element(params) {
+      const el = document.querySelector(params.selector);
+      if (!el) return { error: `No element matching: ${params.selector}` };
+
+      const rect = el.getBoundingClientRect();
+      const styles = window.getComputedStyle(el);
+      const requestedStyles = {};
+      if (params.styles) {
+        params.styles.forEach((prop) => {
+          requestedStyles[prop] = styles.getPropertyValue(prop);
+        });
+      }
+
+      return {
+        selector: params.selector,
+        tagName: el.tagName.toLowerCase(),
+        id: el.id,
+        className: el.className,
+        boundingRect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          left: rect.left,
+        },
+        computedStyles: requestedStyles,
+        attributes: Object.fromEntries(
+          Array.from(el.attributes).map((a) => [a.name, a.value])
+        ),
+        innerText: el.innerText?.substring(0, 500) || "",
+        childCount: el.children.length,
+      };
+    },
+
+    query_all(params) {
+      const els = document.querySelectorAll(params.selector);
+      return {
+        selector: params.selector,
+        count: els.length,
+        elements: Array.from(els)
+          .slice(0, params.limit || 20)
+          .map((el) => {
+            const rect = el.getBoundingClientRect();
+            return {
+              tagName: el.tagName.toLowerCase(),
+              id: el.id,
+              className: el.className,
+              boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+              innerText: el.innerText?.substring(0, 200) || "",
+            };
+          }),
+      };
+    },
+
+    get_page_snapshot() {
+      return {
+        url: location.href,
+        title: document.title,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+        },
+        elementCount: document.querySelectorAll("*").length,
+        bodyClasses: document.body.className,
+        bodyChildren: Array.from(document.body.children)
+          .slice(0, 30)
+          .map((el) => ({
+            tagName: el.tagName.toLowerCase(),
+            id: el.id,
+            className: el.className,
+            childCount: el.children.length,
+          })),
+        console: logs.slice(-20),
+        errors: errors.slice(-10),
+      };
+    },
+  };
+
+  function handleRequest(request) {
+    const handler = handlers[request.tool];
+    if (!handler) {
+      return { error: `Unknown tool: ${request.tool}` };
+    }
+    try {
+      return handler(request.params || {});
+    } catch (e) {
+      return { error: e.message, stack: e.stack };
+    }
+  }
+
+  // --- Poll for requests ---
+
+  async function pollForRequests() {
+    try {
+      const resp = await fetch(
+        `${RELAY}/session/${KEY}/request/pending?timeout=15`
+      );
+      const data = await resp.json();
+
+      if (data.pending === false || !data.request_id) {
+        return;
+      }
+
+      const result = handleRequest(data);
+
+      await fetch(`${RELAY}/session/${KEY}/response`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_id: data.request_id,
+          data: result.error ? {} : result,
+          error: result.error || null,
+        }),
+      });
+    } catch (_) {
+      // Silent fail
+    }
+  }
+
+  // --- Init ---
+
+  captureConsole();
+  captureErrors();
+
+  // Baseline snapshots on interval
+  setInterval(pushSnapshot, SNAPSHOT_INTERVAL);
+  pushSnapshot();
+
+  // Poll for on-demand requests
+  (async function pollLoop() {
+    while (true) {
+      await pollForRequests();
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+    }
+  })();
+
+  console.info(`[sncro] Agent active — key: ${KEY.substring(0, 4)}****`);
+})();
