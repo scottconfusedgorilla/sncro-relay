@@ -147,8 +147,8 @@ async def check_session(key: str) -> dict:
     return {"active": store.has_session(key)}
 
 
-# Mount MCP server via SSE transport
-app.mount("/mcp", mcp.sse_app())
+# Mount MCP server via Streamable HTTP transport
+app.mount("/mcp", mcp.streamable_http_app())
 
 
 # =============================================================================
