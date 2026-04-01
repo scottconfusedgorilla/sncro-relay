@@ -24,7 +24,8 @@ store = SessionStore(expiry_hours=KEY_EXPIRY_HOURS)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(store.cleanup_loop())
-    yield
+    async with mcp.session_manager.run():
+        yield
     cleanup_task.cancel()
 
 
@@ -148,7 +149,8 @@ async def check_session(key: str) -> dict:
 
 
 # Mount MCP server via Streamable HTTP transport
-app.mount("/mcp", mcp.streamable_http_app())
+_mcp_app = mcp.streamable_http_app()
+app.mount("/mcp", _mcp_app)
 
 
 # =============================================================================
