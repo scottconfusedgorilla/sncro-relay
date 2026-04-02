@@ -348,6 +348,16 @@ async def download_fastapi_client():
     return FileResponse(middleware_path, filename="sncro_middleware.py", media_type="text/x-python")
 
 
+@app.get("/client/flask")
+async def download_flask_client():
+    """Serve the Flask middleware file for download."""
+    from fastapi.responses import FileResponse
+    middleware_path = Path(__file__).parent.parent / "middleware" / "sncro_flask.py"
+    if not middleware_path.exists():
+        raise HTTPException(404, "Client file not found")
+    return FileResponse(middleware_path, filename="sncro_flask.py", media_type="text/x-python")
+
+
 # --- Health check ---
 
 @app.get("/health")
