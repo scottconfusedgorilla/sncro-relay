@@ -65,6 +65,10 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         if "text/html" not in content_type:
             return response
 
+        # Skip direct passthrough responses (e.g. send_from_directory)
+        if response.direct_passthrough:
+            return response
+
         data = response.get_data(as_text=True)
         tag = SCRIPT_TAG.format(relay=relay, key=key)
 
