@@ -86,27 +86,35 @@ in the user's browser rather than asking for screenshots.
 
 
 @mcp.tool()
-async def create_session(project_key: str) -> dict:
-    """Create a new sncro session. Returns a session key.
+async def create_session(project_key: str, git_user: str = "") -> dict:
+    """Create a new sncro session. Returns a session key and secret.
 
     Args:
         project_key: The project key from CLAUDE.md (registered at sncro.net)
+        git_user: The current git username (for guest access control)
 
     After calling this, tell the user to paste this URL in their browser:
       {their_app_url}/sncro/enable/{session_key}
 
-    Then use the returned session_key with all other sncro tools.
+    Then use the returned session_key and session_secret with all other sncro tools.
     """
     sb = _get_supabase()
 
     if sb:
         try:
             # Validate project key
-            project_resp = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).execute()
+            project_resp = sb.table("projects").select("id, user_id, domain, allow_guests").eq("project_key", project_key).execute()
             rows = [r for r in (project_resp.data or []) if r.get("deleted_at") is None]
             if not rows:
                 return {"error": "Invalid project key. Register your project at sncro.net"}
             project = rows[0]
+
+            # Check guest access
+            if not project.get("allow_guests", True) and git_user:
+                owner_resp = sb.table("profiles").select("github_username").eq("id", project["user_id"]).execute()
+                owner_name = owner_resp.data[0]["github_username"] if owner_resp.data else ""
+                if git_user.lower() != owner_name.lower():
+                    return {"error": "This project does not allow guest access. Contact the project owner at sncro.net"}
 
             # Check plan limits
             user_id = project["user_id"]
