@@ -12,19 +12,29 @@ class SessionStore:
         self.expiry_seconds = expiry_hours * 3600
         self._sessions: dict[str, dict] = {}
 
-    def _new_session(self) -> dict:
+    def _new_session(self, secret: str = "") -> dict:
         return {
             "created_at": time.time(),
             "last_seen": time.time(),
+            "secret": secret,
             "snapshot": None,
             "requests": deque(),
             "responses": {},
         }
 
-    def ensure_session(self, key: str) -> None:
+    def ensure_session(self, key: str, secret: str = "") -> None:
         if key not in self._sessions:
-            self._sessions[key] = self._new_session()
+            self._sessions[key] = self._new_session(secret=secret)
         self._sessions[key]["last_seen"] = time.time()
+
+    def verify_secret(self, key: str, secret: str) -> bool:
+        """Check if the secret matches. Returns True if no secret was set (legacy)."""
+        if key not in self._sessions:
+            return False
+        stored = self._sessions[key].get("secret", "")
+        if not stored:
+            return True  # No secret set — legacy session, allow access
+        return stored == secret
 
     def has_session(self, key: str) -> bool:
         return key in self._sessions

@@ -73,9 +73,12 @@ mcp = FastMCP("sncro", transport_security=TransportSecuritySettings(
 SNCRO gives you live visibility into the user's browser.
 
 To start a session:
-1. Call create_session to get a session key
-2. Tell the user to paste this URL in their browser: {app_url}/sncro/enable/{key}
-3. Once enabled, use the key with get_console_logs, query_element, query_all, get_page_snapshot
+1. Call create_session with the project_key from CLAUDE.md
+2. You'll get back a session_key AND a session_secret — remember both
+3. Tell the user to paste this URL in their browser: {app_url}/sncro/enable/{session_key}
+4. Pass both key and secret to every tool call (get_console_logs, query_element, etc.)
+
+The session_secret proves you created the session. Never share it — it's your auth token.
 
 You should proactively use SNCRO when debugging CSS, layout, or JS issues
 in the user's browser rather than asking for screenshots.
@@ -139,16 +142,28 @@ async def create_session(project_key: str) -> dict:
             import traceback
             traceback.print_exc()
 
-    session_key = secrets.token_hex(4)  # 8 hex chars
-    store.ensure_session(session_key)
+    session_key = secrets.token_hex(16)  # 32 hex chars
+    session_secret = secrets.token_hex(16)  # 32 hex chars — only Claude knows this
+    store.ensure_session(session_key, secret=session_secret)
     return {
         "session_key": session_key,
+        "session_secret": session_secret,
         "instructions": f"Tell the user to paste this URL in their browser: <app_domain>/sncro/enable/{session_key}",
     }
 
 
-async def _send_browser_request(key: str, tool: str, params: dict | None = None) -> dict:
+def _check_secret(key: str, secret: str) -> dict | None:
+    """Verify session secret. Returns error dict if invalid, None if OK."""
+    if not store.verify_secret(key, secret):
+        return {"error": "Invalid session secret. Did you use the secret from create_session?"}
+    return None
+
+
+async def _send_browser_request(key: str, secret: str, tool: str, params: dict | None = None) -> dict:
     """Post a request to the store and wait for the browser's response."""
+    err = _check_secret(key, secret)
+    if err:
+        return err
     store.ensure_session(key)
     request_id = uuid.uuid4().hex[:12]
     store.add_request(key, {
@@ -168,12 +183,15 @@ async def _send_browser_request(key: str, tool: str, params: dict | None = None)
 
 
 @mcp.tool()
-async def get_console_logs(key: str) -> dict:
+async def get_console_logs(key: str, secret: str) -> dict:
     """Get recent console logs and errors from the browser.
 
     Returns the latest console output and any JavaScript errors,
     including unhandled exceptions and promise rejections.
     """
+    err = _check_secret(key, secret)
+    if err:
+        return err
     store.ensure_session(key)
     snapshot = store.get_snapshot(key)
     if snapshot is None:
@@ -182,7 +200,7 @@ async def get_console_logs(key: str) -> dict:
 
 
 @mcp.tool()
-async def query_element(key: str, selector: str, styles: list[str] | None = None) -> dict:
+async def query_element(key: str, secret: str, selector: str, styles: list[str] | None = None) -> dict:
     """Query a DOM element by CSS selector.
 
     Returns bounding rect, attributes, computed styles, inner text,
@@ -191,17 +209,18 @@ async def query_element(key: str, selector: str, styles: list[str] | None = None
 
     Args:
         key: The sncro session key
+        secret: The session secret from create_session
         selector: CSS selector (e.g. "#photo-wrap", ".toolbar > button:first-child")
         styles: Optional list of CSS properties to read (e.g. ["transform", "width", "display"])
     """
-    return await _send_browser_request(key, "query_element", {
+    return await _send_browser_request(key, secret, "query_element", {
         "selector": selector,
         "styles": styles or [],
     })
 
 
 @mcp.tool()
-async def query_all(key: str, selector: str, limit: int = 20) -> dict:
+async def query_all(key: str, secret: str, selector: str, limit: int = 20) -> dict:
     """Query all matching DOM elements by CSS selector.
 
     Returns a summary of each matching element (tag, id, class,
@@ -210,17 +229,18 @@ async def query_all(key: str, selector: str, limit: int = 20) -> dict:
 
     Args:
         key: The sncro session key
+        secret: The session secret from create_session
         selector: CSS selector
         limit: Max elements to return (default 20)
     """
-    return await _send_browser_request(key, "query_all", {
+    return await _send_browser_request(key, secret, "query_all", {
         "selector": selector,
         "limit": limit,
     })
 
 
 @mcp.tool()
-async def get_network_log(key: str, limit: int = 50, type: str | None = None) -> dict:
+async def get_network_log(key: str, secret: str, limit: int = 50, type: str | None = None) -> dict:
     """Get network performance data from the browser.
 
     Returns resource timing entries (URLs, durations, sizes) sorted
@@ -231,32 +251,39 @@ async def get_network_log(key: str, limit: int = 50, type: str | None = None) ->
 
     Args:
         key: The sncro session key
+        secret: The session secret from create_session
         limit: Max resources to return (default 50)
         type: Filter by initiator type (e.g. "fetch", "xmlhttprequest", "img", "script", "css")
     """
+    err = _check_secret(key, secret)
+    if err:
+        return err
     params = {"limit": limit}
     if type:
         params["type"] = type
-    return await _send_browser_request(key, "get_network_log", params)
+    return await _send_browser_request(key, secret, "get_network_log", params)
 
 
 @mcp.tool()
-async def get_page_snapshot(key: str) -> dict:
+async def get_page_snapshot(key: str, secret: str) -> dict:
     """Get a high-level snapshot of the current page.
 
     Returns URL, title, viewport dimensions, scroll position,
     top-level DOM structure, recent console logs, and recent errors.
     """
-    return await _send_browser_request(key, "get_page_snapshot", {})
+    return await _send_browser_request(key, secret, "get_page_snapshot", {})
 
 
 @mcp.tool()
-async def check_session(key: str) -> dict:
+async def check_session(key: str, secret: str) -> dict:
     """Check if a sncro session is active.
 
     Use this to verify the browser has sncro enabled before
     making other queries.
     """
+    err = _check_secret(key, secret)
+    if err:
+        return err
     return {"active": store.has_session(key)}
 
 
