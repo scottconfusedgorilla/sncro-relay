@@ -67,8 +67,8 @@ if static_dir.exists():
 
 mcp = FastMCP("sncro", transport_security=TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
-    allowed_hosts=["sncro-production.up.railway.app", "localhost:*", "127.0.0.1:*"],
-    allowed_origins=["https://sncro-production.up.railway.app"],
+    allowed_hosts=["relay.sncro.net", "sncro-production.up.railway.app", "localhost:*", "127.0.0.1:*"],
+    allowed_origins=["https://relay.sncro.net", "https://sncro-production.up.railway.app"],
 ), instructions="""
 SNCRO gives you live visibility into the user's browser.
 
