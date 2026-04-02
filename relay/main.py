@@ -1,10 +1,12 @@
 """sncro relay — keyed long-poll rendezvous server + MCP server."""
 
 import asyncio
+import os
 import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -16,6 +18,19 @@ from pydantic import BaseModel
 from mcp.server.transport_security import TransportSecuritySettings
 
 from relay.store import SessionStore
+
+# Optional Supabase for quota enforcement (relay works without it for local dev)
+_supabase_client = None
+
+def _get_supabase():
+    global _supabase_client
+    if _supabase_client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if url and key:
+            from supabase import create_client
+            _supabase_client = create_client(url, key)
+    return _supabase_client
 
 KEY_EXPIRY_HOURS = 4
 LONG_POLL_TIMEOUT = 30  # seconds
@@ -68,17 +83,59 @@ in the user's browser rather than asking for screenshots.
 
 
 @mcp.tool()
-async def create_session() -> dict:
+async def create_session(project_key: str) -> dict:
     """Create a new sncro session. Returns a session key.
 
-    After calling this, tell the user to paste this URL in their browser:
-      {their_app_url}/sncro/enable/{key}
+    Args:
+        project_key: The project key from CLAUDE.md (registered at sncro.net)
 
-    Then use the returned key with all other sncro tools.
+    After calling this, tell the user to paste this URL in their browser:
+      {their_app_url}/sncro/enable/{session_key}
+
+    Then use the returned session_key with all other sncro tools.
     """
-    key = secrets.token_hex(4)  # 8 hex chars
-    store.ensure_session(key)
-    return {"key": key, "instructions": f"Tell the user to paste this URL in their browser: <app_url>/sncro/enable/{key}"}
+    sb = _get_supabase()
+
+    if sb:
+        # Validate project key and check quota
+        project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", "null").single().execute()
+        if not project.data:
+            return {"error": "Invalid project key. Register your project at sncro.net"}
+
+        # Check plan limits
+        user_id = project.data["user_id"]
+        sub = sb.table("subscriptions").select("plan, status, trial_ends_at").eq("user_id", user_id).single().execute()
+        plan = sub.data["plan"] if sub.data else "free"
+
+        # Check if trial has expired
+        if sub.data and sub.data.get("status") == "trialing" and sub.data.get("trial_ends_at"):
+            trial_end = datetime.fromisoformat(sub.data["trial_ends_at"])
+            if trial_end < datetime.now(timezone.utc):
+                sb.table("subscriptions").update({"plan": "free", "status": "lapsed"}).eq("user_id", user_id).execute()
+                plan = "free"
+
+        limits = {"free": 31, "solo": 999, "pro": 999999}
+        max_sessions = limits.get(plan, 31)
+
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        usage = sb.table("usage").select("session_count").eq("project_id", project.data["id"]).eq("month", month).single().execute()
+        current = usage.data["session_count"] if usage.data else 0
+
+        if current >= max_sessions:
+            return {"error": f"Session limit reached ({current}/{max_sessions}). Upgrade at sncro.net"}
+
+        # Increment usage
+        if usage.data:
+            sb.table("usage").update({"session_count": current + 1}).eq("project_id", project.data["id"]).eq("month", month).execute()
+        else:
+            sb.table("usage").insert({"project_id": project.data["id"], "month": month, "session_count": 1}).execute()
+
+    session_key = secrets.token_hex(4)  # 8 hex chars
+    store.ensure_session(session_key)
+    return {
+        "session_key": session_key,
+        "instructions": f"Tell the user to paste this URL in their browser: <app_domain>/sncro/enable/{session_key}",
+    }
 
 
 async def _send_browser_request(key: str, tool: str, params: dict | None = None) -> dict:
