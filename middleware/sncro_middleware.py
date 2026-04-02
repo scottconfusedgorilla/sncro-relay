@@ -85,7 +85,7 @@ async def sncro_enable(key: str):
 </body></html>"""
 
     response = HTMLResponse(content=html)
-    response.set_cookie(SNCRO_COOKIE, key, httponly=True, samesite="lax")
+    response.set_cookie(SNCRO_COOKIE, key, httponly=False, samesite="lax")
     return response
 
 

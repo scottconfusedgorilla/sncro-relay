@@ -37,7 +37,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   <a href="/sncro/disable">Disable</a></p>
 </body></html>"""
         resp = make_response(html)
-        resp.set_cookie(SNCRO_COOKIE, key, httponly=True, samesite="Lax")
+        resp.set_cookie(SNCRO_COOKIE, key, httponly=False, samesite="Lax")
         return resp
 
     @app.route("/sncro/disable")

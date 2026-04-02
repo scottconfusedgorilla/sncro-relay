@@ -1,19 +1,29 @@
 /**
  * sncro agent — injected into pages to capture DOM/console state
- * and relay it to sncro.net for Claude Code to read via MCP.
+ * and relay it to the sncro relay for Claude Code to read via MCP.
  *
- * Usage: <script src="https://sncro.net/static/agent.js" data-key="YOUR_KEY"></script>
- * Or injected by the sncro FastAPI middleware.
+ * Key is read from: data-key attribute > sncro_key cookie > disabled.
+ * Relay URL from: data-relay attribute > script src origin.
+ *
+ * Usage (static): <script src="https://relay.sncro.net/static/agent.js"></script>
+ * Usage (middleware): Injected automatically with data-key and data-relay.
  */
 (function () {
   "use strict";
 
   const script = document.currentScript;
   const RELAY = script?.getAttribute("data-relay") || script?.src.replace(/\/static\/agent\.js.*/, "") || "";
-  const KEY = script?.getAttribute("data-key") || "";
+
+  // Read key from data attribute first, fall back to cookie
+  function getCookie(name) {
+    const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  const KEY = script?.getAttribute("data-key") || getCookie("sncro_key") || "";
 
   if (!KEY) {
-    console.warn("[sncro] No session key provided. Agent disabled.");
+    // No key — silently disabled (don't warn, user may not have enabled sncro)
     return;
   }
 
