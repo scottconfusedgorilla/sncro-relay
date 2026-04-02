@@ -99,7 +99,7 @@ async def create_session(project_key: str) -> dict:
     if sb:
         # Validate project key and check quota
         try:
-            project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", "null").maybe_single().execute()
+            project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", None).maybe_single().execute()
         except Exception:
             project = None
         if not project or not project.data:
