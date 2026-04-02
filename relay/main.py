@@ -106,7 +106,10 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
             project_resp = sb.table("projects").select("id, user_id, domain, allow_guests").eq("project_key", project_key).execute()
             rows = [r for r in (project_resp.data or []) if r.get("deleted_at") is None]
             if not rows:
-                return {"error": "Invalid project key. Register your project at sncro.net"}
+                return {
+                    "error": "INVALID_PROJECT_KEY",
+                    "message": "This project key is not registered. The project owner needs to register the domain at https://www.sncro.net/dashboard and add the correct project_key to CLAUDE.md. Tell the user this.",
+                }
             project = rows[0]
 
             # Check guest access
@@ -114,7 +117,10 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
                 owner_resp = sb.table("profiles").select("github_username").eq("id", project["user_id"]).execute()
                 owner_name = owner_resp.data[0]["github_username"] if owner_resp.data else ""
                 if git_user.lower() != owner_name.lower():
-                    return {"error": "This project does not allow guest access. Contact the project owner at sncro.net"}
+                    return {
+                        "error": "GUEST_ACCESS_DENIED",
+                        "message": "This project has guest access disabled — only the project owner can create sncro sessions. Tell the user: the project owner needs to enable 'Allow guest access' in their sncro dashboard at https://www.sncro.net/dashboard, or you need to register your own project.",
+                    }
 
             # Check plan limits
             user_id = project["user_id"]
@@ -138,7 +144,18 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
             current = usage_resp.data[0]["session_count"] if usage_resp.data else 0
 
             if current >= max_sessions:
-                return {"error": f"Session limit reached ({current}/{max_sessions}). Upgrade at sncro.net"}
+                plans = {
+                    "free": "You're on the Free plan (31 sessions/month). Upgrade to Solo ($9/month) for 999 sessions, or Pro ($29/month) for unlimited.",
+                    "solo": "You're on the Solo plan (999 sessions/month). Upgrade to Pro ($29/month) for unlimited sessions.",
+                    "pro": "You've somehow exceeded unlimited sessions. This shouldn't happen — contact support at scott@sncro.net.",
+                }
+                return {
+                    "error": "SESSION_LIMIT_REACHED",
+                    "message": f"This project has used all {max_sessions} sncro sessions for this month ({current}/{max_sessions}). " +
+                        plans.get(plan, plans["free"]) +
+                        " Visit https://www.sncro.net/account to upgrade. " +
+                        "Please tell the user exactly this — they need to upgrade their sncro plan to continue using browser debugging.",
+                }
 
             # Increment usage
             if usage_resp.data:
