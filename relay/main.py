@@ -98,14 +98,20 @@ async def create_session(project_key: str) -> dict:
 
     if sb:
         # Validate project key and check quota
-        project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", "null").single().execute()
-        if not project.data:
+        try:
+            project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", "null").maybe_single().execute()
+        except Exception:
+            project = None
+        if not project or not project.data:
             return {"error": "Invalid project key. Register your project at sncro.net"}
 
         # Check plan limits
         user_id = project.data["user_id"]
-        sub = sb.table("subscriptions").select("plan, status, trial_ends_at").eq("user_id", user_id).single().execute()
-        plan = sub.data["plan"] if sub.data else "free"
+        try:
+            sub = sb.table("subscriptions").select("plan, status, trial_ends_at").eq("user_id", user_id).maybe_single().execute()
+        except Exception:
+            sub = None
+        plan = sub.data["plan"] if sub and sub.data else "free"
 
         # Check if trial has expired
         if sub.data and sub.data.get("status") == "trialing" and sub.data.get("trial_ends_at"):
@@ -118,8 +124,11 @@ async def create_session(project_key: str) -> dict:
         max_sessions = limits.get(plan, 31)
 
         month = datetime.now(timezone.utc).strftime("%Y-%m")
-        usage = sb.table("usage").select("session_count").eq("project_id", project.data["id"]).eq("month", month).single().execute()
-        current = usage.data["session_count"] if usage.data else 0
+        try:
+            usage = sb.table("usage").select("session_count").eq("project_id", project.data["id"]).eq("month", month).maybe_single().execute()
+        except Exception:
+            usage = None
+        current = usage.data["session_count"] if usage and usage.data else 0
 
         if current >= max_sessions:
             return {"error": f"Session limit reached ({current}/{max_sessions}). Upgrade at sncro.net"}
