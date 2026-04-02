@@ -336,6 +336,18 @@ async def session_status(key: str):
     return {"active": store.has_session(key)}
 
 
+# --- Client downloads ---
+
+@app.get("/client/fastapi")
+async def download_fastapi_client():
+    """Serve the FastAPI middleware file for download."""
+    from fastapi.responses import FileResponse
+    middleware_path = Path(__file__).parent.parent / "middleware" / "sncro_middleware.py"
+    if not middleware_path.exists():
+        raise HTTPException(404, "Client file not found")
+    return FileResponse(middleware_path, filename="sncro_middleware.py", media_type="text/x-python")
+
+
 # --- Health check ---
 
 @app.get("/health")
