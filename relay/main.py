@@ -97,47 +97,47 @@ async def create_session(project_key: str) -> dict:
     sb = _get_supabase()
 
     if sb:
-        # Validate project key and check quota
         try:
-            project = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).is_("deleted_at", None).maybe_single().execute()
-        except Exception:
-            project = None
-        if not project or not project.data:
-            return {"error": "Invalid project key. Register your project at sncro.net"}
+            # Validate project key
+            project_resp = sb.table("projects").select("id, user_id, domain").eq("project_key", project_key).execute()
+            rows = [r for r in (project_resp.data or []) if r.get("deleted_at") is None]
+            if not rows:
+                return {"error": "Invalid project key. Register your project at sncro.net"}
+            project = rows[0]
 
-        # Check plan limits
-        user_id = project.data["user_id"]
-        try:
-            sub = sb.table("subscriptions").select("plan, status, trial_ends_at").eq("user_id", user_id).maybe_single().execute()
-        except Exception:
-            sub = None
-        plan = sub.data["plan"] if sub and sub.data else "free"
+            # Check plan limits
+            user_id = project["user_id"]
+            sub_resp = sb.table("subscriptions").select("plan, status, trial_ends_at").eq("user_id", user_id).execute()
+            sub = sub_resp.data[0] if sub_resp.data else None
+            plan = sub["plan"] if sub else "free"
 
-        # Check if trial has expired
-        if sub.data and sub.data.get("status") == "trialing" and sub.data.get("trial_ends_at"):
-            trial_end = datetime.fromisoformat(sub.data["trial_ends_at"])
-            if trial_end < datetime.now(timezone.utc):
-                sb.table("subscriptions").update({"plan": "free", "status": "lapsed"}).eq("user_id", user_id).execute()
-                plan = "free"
+            # Check if trial has expired
+            if sub and sub.get("status") == "trialing" and sub.get("trial_ends_at"):
+                trial_end = datetime.fromisoformat(sub["trial_ends_at"])
+                if trial_end < datetime.now(timezone.utc):
+                    sb.table("subscriptions").update({"plan": "free", "status": "lapsed"}).eq("user_id", user_id).execute()
+                    plan = "free"
 
-        limits = {"free": 31, "solo": 999, "pro": 999999}
-        max_sessions = limits.get(plan, 31)
+            limits = {"free": 31, "solo": 999, "pro": 999999}
+            max_sessions = limits.get(plan, 31)
 
-        month = datetime.now(timezone.utc).strftime("%Y-%m")
-        try:
-            usage = sb.table("usage").select("session_count").eq("project_id", project.data["id"]).eq("month", month).maybe_single().execute()
-        except Exception:
-            usage = None
-        current = usage.data["session_count"] if usage and usage.data else 0
+            # Check usage this month
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+            usage_resp = sb.table("usage").select("session_count").eq("project_id", project["id"]).eq("month", month).execute()
+            current = usage_resp.data[0]["session_count"] if usage_resp.data else 0
 
-        if current >= max_sessions:
-            return {"error": f"Session limit reached ({current}/{max_sessions}). Upgrade at sncro.net"}
+            if current >= max_sessions:
+                return {"error": f"Session limit reached ({current}/{max_sessions}). Upgrade at sncro.net"}
 
-        # Increment usage
-        if usage.data:
-            sb.table("usage").update({"session_count": current + 1}).eq("project_id", project.data["id"]).eq("month", month).execute()
-        else:
-            sb.table("usage").insert({"project_id": project.data["id"], "month": month, "session_count": 1}).execute()
+            # Increment usage
+            if usage_resp.data:
+                sb.table("usage").update({"session_count": current + 1}).eq("project_id", project["id"]).eq("month", month).execute()
+            else:
+                sb.table("usage").insert({"project_id": project["id"], "month": month, "session_count": 1}).execute()
+        except Exception as e:
+            # If quota check fails, log but don't block — let the session through
+            import traceback
+            traceback.print_exc()
 
     session_key = secrets.token_hex(4)  # 8 hex chars
     store.ensure_session(session_key)
