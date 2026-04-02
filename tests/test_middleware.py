@@ -33,7 +33,7 @@ class TestEnableDisable:
         assert resp.status_code == 200
         assert "sncro_key" in resp.cookies
         assert resp.cookies["sncro_key"] == "abc12345"
-        assert "abc12345" in resp.text
+        assert "Connected" in resp.text
 
     def test_disable_clears_cookie(self):
         resp = client.get("/sncro/disable")

@@ -68,20 +68,35 @@ sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
 async def sncro_enable(key: str):
     """Enable sncro with a key from Claude's create_session tool."""
-    html = f"""<!DOCTYPE html>
+    html = """<!DOCTYPE html>
 <html><head><title>sncro enabled</title>
 <style>
-  body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
-  .key {{ font-size: 2em; font-family: monospace; padding: 20px; background: #f0f0f0;
-          border-radius: 8px; margin: 20px 0; letter-spacing: 0.1em; user-select: all; }}
-  .hint {{ color: #666; margin-top: 20px; }}
-  a {{ color: #2563eb; }}
+  body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
+  .status { font-size: 1.4em; color: #16a34a; margin: 30px 0 10px; }
+  .hint { color: #666; margin-top: 10px; line-height: 1.6; }
+  .countdown { font-size: 1.1em; color: #333; margin-top: 20px; }
+  .countdown span { font-weight: bold; font-size: 1.3em; }
+  a { color: #2563eb; }
 </style></head>
 <body>
-  <h2>sncro is active</h2>
-  <p>Session key: <span class="key">{key}</span></p>
-  <p class="hint">Claude Code is now connected to this browser session.<br>
-  <a href="/sncro/disable">Disable</a></p>
+  <h2>sncro</h2>
+  <p class="status">Connected!</p>
+  <p class="hint">Please let Claude know that sncro is active.</p>
+  <p class="countdown">Returning to previous page in <span id="count">5</span> seconds...</p>
+  <p class="hint"><a href="/sncro/disable">Disable sncro</a></p>
+  <script>
+    var n = 5;
+    var el = document.getElementById('count');
+    var t = setInterval(function() {
+      n--;
+      el.textContent = n;
+      if (n <= 0) {
+        clearInterval(t);
+        if (history.length > 1) history.back();
+        else location.href = '/';
+      }
+    }, 1000);
+  </script>
 </body></html>"""
 
     response = HTMLResponse(content=html)
