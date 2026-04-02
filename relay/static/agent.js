@@ -156,6 +156,49 @@
       };
     },
 
+    get_network_log(params) {
+      const entries = performance.getEntriesByType("resource");
+      const nav = performance.getEntriesByType("navigation")[0];
+      const limit = params.limit || 50;
+
+      // Filter and sort by duration descending (slowest first)
+      let resources = entries.map((e) => ({
+        name: e.name.replace(/^https?:\/\/[^/]+/, ""),  // relative URL
+        fullUrl: e.name,
+        type: e.initiatorType,
+        duration: Math.round(e.duration),
+        size: e.transferSize || 0,
+        startTime: Math.round(e.startTime),
+      }));
+
+      // Optional filter by type
+      if (params.type) {
+        resources = resources.filter((r) => r.type === params.type);
+      }
+
+      // Sort slowest first
+      resources.sort((a, b) => b.duration - a.duration);
+
+      const result = {
+        resourceCount: entries.length,
+        resources: resources.slice(0, limit),
+      };
+
+      // Add navigation timing if available
+      if (nav) {
+        result.navigation = {
+          url: location.href,
+          domContentLoaded: Math.round(nav.domContentLoadedEventEnd - nav.startTime),
+          loaded: Math.round(nav.loadEventEnd - nav.startTime),
+          domInteractive: Math.round(nav.domInteractive - nav.startTime),
+          responseEnd: Math.round(nav.responseEnd - nav.startTime),
+          transferSize: nav.transferSize || 0,
+        };
+      }
+
+      return result;
+    },
+
     get_page_snapshot() {
       return {
         url: location.href,

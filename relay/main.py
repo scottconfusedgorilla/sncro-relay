@@ -220,6 +220,27 @@ async def query_all(key: str, selector: str, limit: int = 20) -> dict:
 
 
 @mcp.tool()
+async def get_network_log(key: str, limit: int = 50, type: str | None = None) -> dict:
+    """Get network performance data from the browser.
+
+    Returns resource timing entries (URLs, durations, sizes) sorted
+    by duration (slowest first), plus page navigation timing.
+
+    Use this to find slow API calls, large assets, or overall page
+    load performance.
+
+    Args:
+        key: The sncro session key
+        limit: Max resources to return (default 50)
+        type: Filter by initiator type (e.g. "fetch", "xmlhttprequest", "img", "script", "css")
+    """
+    params = {"limit": limit}
+    if type:
+        params["type"] = type
+    return await _send_browser_request(key, "get_network_log", params)
+
+
+@mcp.tool()
 async def get_page_snapshot(key: str) -> dict:
     """Get a high-level snapshot of the current page.
 
