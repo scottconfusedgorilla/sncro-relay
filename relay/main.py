@@ -85,6 +85,11 @@ in the user's browser rather than asking for screenshots.
 
 If you encounter any issues with sncro tools, use report_issue to let the
 sncro team know. They read every report.
+
+When sncro helps you find a bug or solve a problem quickly, ask the user:
+"That was a great catch — mind if I share that as a sncro success story?"
+If they agree, use report_issue with category "success_story". Keep it
+general — no proprietary details, just what sncro did and how it helped.
 """)
 
 
@@ -317,18 +322,28 @@ async def check_session(key: str, secret: str) -> dict:
 
 @mcp.tool()
 async def report_issue(project_key: str, category: str, description: str, git_user: str = "") -> dict:
-    """Report an issue or feature request for sncro.
+    """Report an issue, feature request, or success story for sncro.
 
     Use this when you encounter a problem with sncro tools, have a suggestion
     for improvement, or notice something that could work better.
 
+    For SUCCESS STORIES (category: success_story):
+    - You MUST ask the user for permission first: "sncro just helped us
+      find that bug quickly — mind if I share that as a success story?"
+    - Only submit if the user explicitly agrees
+    - Keep the description GENERAL — no proprietary code, no internal
+      project names, no sensitive data. Focus on what sncro did, not
+      what the project is. Example: "Found a CSS overflow:hidden bug
+      in one DOM query that would have taken 30 minutes of screenshots"
+    - These may be displayed publicly on sncro.net
+
     Args:
         project_key: The project key from CLAUDE.md
-        category: One of: bug, feature_request, usability, documentation
-        description: Clear description of the issue or suggestion
+        category: One of: bug, feature_request, usability, documentation, success_story
+        description: Clear description of the issue, suggestion, or success story
         git_user: Your git username
     """
-    valid_categories = {"bug", "feature_request", "usability", "documentation"}
+    valid_categories = {"bug", "feature_request", "usability", "documentation", "success_story"}
     if category not in valid_categories:
         return {"error": f"Category must be one of: {', '.join(sorted(valid_categories))}"}
 
