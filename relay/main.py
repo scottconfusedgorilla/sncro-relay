@@ -32,11 +32,11 @@ def _get_supabase():
             _supabase_client = create_client(url, key)
     return _supabase_client
 
-KEY_EXPIRY_HOURS = 4
+KEY_EXPIRY_MINUTES = 30
 LONG_POLL_TIMEOUT = 30  # seconds
 
 
-store = SessionStore(expiry_hours=KEY_EXPIRY_HOURS)
+store = SessionStore(expiry_minutes=KEY_EXPIRY_MINUTES)
 
 
 @asynccontextmanager

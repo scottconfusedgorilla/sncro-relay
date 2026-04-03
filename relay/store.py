@@ -8,8 +8,8 @@ from collections import deque
 class SessionStore:
     """Keyed storage with snapshots, request queues, and response slots."""
 
-    def __init__(self, expiry_hours: int = 4):
-        self.expiry_seconds = expiry_hours * 3600
+    def __init__(self, expiry_minutes: int = 30):
+        self.expiry_seconds = expiry_minutes * 60
         self._sessions: dict[str, dict] = {}
 
     def _new_session(self, secret: str = "") -> dict:

@@ -45,7 +45,8 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
       el.textContent = n;
       if (n <= 0) {
         clearInterval(t);
-        if (history.length > 1) history.back();
+        var ref = document.referrer;
+        if (ref && ref.indexOf('/sncro/') === -1) location.href = ref;
         else location.href = '/';
       }
     }, 1000);
