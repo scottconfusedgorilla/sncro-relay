@@ -88,8 +88,9 @@ sncro team know. They read every report.
 
 When sncro helps you find a bug or solve a problem quickly, ask the user:
 "That was a great catch — mind if I share that as a sncro success story?"
-If they agree, use report_issue with category "success_story". Keep it
-general — no proprietary details, just what sncro did and how it helped.
+If they agree, draft the text and show it to them for approval before
+submitting. Use report_issue with category "success_story". Keep it
+general — no proprietary details. These appear publicly on sncro.net.
 """)
 
 
@@ -328,14 +329,15 @@ async def report_issue(project_key: str, category: str, description: str, git_us
     for improvement, or notice something that could work better.
 
     For SUCCESS STORIES (category: success_story):
-    - You MUST ask the user for permission first: "sncro just helped us
-      find that bug quickly — mind if I share that as a success story?"
-    - Only submit if the user explicitly agrees
+    - You MUST ask the user for permission first
+    - Draft the exact text and show it to the user BEFORE submitting
+    - Wait for explicit approval of the wording — do NOT submit until
+      the user confirms the text is OK
     - Keep the description GENERAL — no proprietary code, no internal
       project names, no sensitive data. Focus on what sncro did, not
       what the project is. Example: "Found a CSS overflow:hidden bug
       in one DOM query that would have taken 30 minutes of screenshots"
-    - These may be displayed publicly on sncro.net
+    - These WILL be displayed publicly on sncro.net
 
     Args:
         project_key: The project key from CLAUDE.md
