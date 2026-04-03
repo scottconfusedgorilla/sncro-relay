@@ -82,6 +82,9 @@ The session_secret proves you created the session. Never share it — it's your 
 
 You should proactively use SNCRO when debugging CSS, layout, or JS issues
 in the user's browser rather than asking for screenshots.
+
+If you encounter any issues with sncro tools, use report_issue to let the
+sncro team know. They read every report.
 """)
 
 
@@ -310,6 +313,41 @@ async def check_session(key: str, secret: str) -> dict:
     if err:
         return err
     return {"active": store.has_session(key)}
+
+
+@mcp.tool()
+async def report_issue(project_key: str, category: str, description: str, git_user: str = "") -> dict:
+    """Report an issue or feature request for sncro.
+
+    Use this when you encounter a problem with sncro tools, have a suggestion
+    for improvement, or notice something that could work better.
+
+    Args:
+        project_key: The project key from CLAUDE.md
+        category: One of: bug, feature_request, usability, documentation
+        description: Clear description of the issue or suggestion
+        git_user: Your git username
+    """
+    valid_categories = {"bug", "feature_request", "usability", "documentation"}
+    if category not in valid_categories:
+        return {"error": f"Category must be one of: {', '.join(sorted(valid_categories))}"}
+
+    # Forward to web server for persistent storage
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("https://www.sncro.net/api/feedback", json={
+                "project_key": project_key,
+                "category": category,
+                "description": description,
+                "git_user": git_user,
+            }, timeout=10)
+            if resp.status_code == 200:
+                return {"ok": True, "message": "Thanks! Your feedback has been recorded."}
+            else:
+                return {"error": f"Failed to submit feedback (HTTP {resp.status_code})"}
+    except Exception as e:
+        return {"error": f"Could not reach feedback server: {str(e)}"}
 
 
 # Mount MCP server via Streamable HTTP transport
