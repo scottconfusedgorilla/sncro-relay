@@ -3,12 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SportsDash — Live Scores</title>
+  <title>SportsCrash — Live Scores</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <div class="page-tabs">
+    <button class="page-tab active" onclick="showPage('demo', this)">Demo Page</button>
+    <button class="page-tab" onclick="showPage('instructions', this)">How to Debug This</button>
+  </div>
+
+  <div id="page-demo">
   <nav class="navbar">
-    <div class="nav-brand">SportsDash</div>
+    <div class="nav-brand">SportsCrash</div>
     <div class="nav-links">
       <a href="/">Scores</a>
       <a href="#standings">Standings</a>
@@ -18,12 +24,7 @@
     </div>
   </nav>
 
-  <div class="page-tabs">
-    <button class="page-tab active" onclick="showPage('demo', this)">Demo Page</button>
-    <button class="page-tab" onclick="showPage('instructions', this)">How to Debug This</button>
-  </div>
-
-  <main class="container" id="page-demo">
+  <main class="container">
     <h1>Today's Scores</h1>
 
     <!-- Bug 4: refresh button triggers a JS error -->
@@ -74,6 +75,7 @@
     </section>
 
   </main>
+  </div>
 
   <div id="page-instructions" class="instructions-page" style="display:none;">
     <section class="try-sncro">
@@ -153,7 +155,7 @@ URL: https://relay.sncro.net/tools/mcp</pre>
   </div>
 
   <footer class="footer">
-    <p>SportsDash is a demo app by <a href="https://www.sncro.net">sncro</a> — built to be debugged.</p>
+    <p>SportsCrash is a demo app by <a href="https://www.sncro.net">sncro</a> — built to be debugged.</p>
     <p class="build-number">build 001</p>
   </footer>
 
