@@ -220,7 +220,7 @@ IMPORTANT: Each session key is single-use — one key, one browser/device. Once 
 YOUR TOOLS:
   get_console_logs — Browser console output and JS errors (including unhandled exceptions and promise rejections). Check this FIRST when something looks wrong.
   get_network_log — Network performance: resource timing, durations, sizes, sorted slowest-first. Find slow API calls, large assets, sequential fetches that should be parallel. Filter by type (fetch, script, img, css).
-  query_element — Deep-inspect one DOM element by CSS selector. Returns bounding rect, attributes, computed styles, inner text, child count. Use for layout debugging, visibility issues, positioning problems.
+  query_element — Deep-inspect one DOM element by CSS selector. Returns bounding rect, attributes, computed styles, inner text, child count. IMPORTANT: pass a "styles" array to read specific CSS properties, e.g. styles=["overflow", "max-height", "display", "visibility", "z-index"]. Without it, computedStyles will be empty.
   query_all — Query all matching elements. Great for checking lists, grids, repeated components, or counting elements.
   get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
   check_session — Verify connection status: "not_found", "waiting", or "connected".
