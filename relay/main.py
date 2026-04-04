@@ -139,18 +139,21 @@ mcp = FastMCP("sncro", transport_security=TransportSecuritySettings(
     allowed_hosts=["relay.sncro.net", "sncro-production.up.railway.app", "localhost:*", "127.0.0.1:*"],
     allowed_origins=["https://relay.sncro.net", "https://sncro-production.up.railway.app"],
 ), instructions="""
-SNCRO gives you live visibility into the user's browser.
+SNCRO gives you live visibility into the user's browser — DOM, console, network, computed styles.
+Use it instead of asking for screenshots whenever debugging CSS, layout, or JS issues.
 
 To start a session:
-1. Call create_session with the project_key from CLAUDE.md
-2. You'll get back a session_key AND a session_secret — remember both
-3. Tell the user to paste this URL in their browser: {app_url}/sncro/enable/{session_key}
-4. Pass both key and secret to every tool call (get_console_logs, query_element, etc.)
+1. Look for project_key in CLAUDE.md
+2. Call create_session with the project_key — you'll get back a full guide with all tools and tips
+3. Tell the user to click the enable_url (it's clickable in most environments)
+4. Pass the session_key as "key" and session_secret as "secret" to every tool call
+
+NO PROJECT KEY? Tell the user:
+  "To use sncro, you need a project key. Go to https://www.sncro.net/dashboard
+  — sign in with GitHub, click '+ Add project', enter your domain, and copy
+  the project key into this project's CLAUDE.md. It takes 30 seconds."
 
 The session_secret proves you created the session. Never share it — it's your auth token.
-
-You should proactively use SNCRO when debugging CSS, layout, or JS issues
-in the user's browser rather than asking for screenshots.
 
 If you encounter any issues with sncro tools, use report_issue to let the
 sncro team know. They read every report.
@@ -171,10 +174,12 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
         project_key: The project key from CLAUDE.md (registered at sncro.net)
         git_user: The current git username (for guest access control)
 
-    After calling this, tell the user to paste this URL in their browser:
-      {their_app_url}/sncro/enable/{session_key}
-
+    After calling this, tell the user to paste the enable_url in their browser.
     Then use the returned session_key and session_secret with all other sncro tools.
+
+    If no project key is available: tell the user to go to https://www.sncro.net/dashboard
+    to register their project and get a key. It takes 30 seconds — sign in with GitHub,
+    click "+ Add project", enter the domain, and copy the project key into CLAUDE.md.
     """
     sb = _get_supabase()
 
