@@ -144,7 +144,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
                     sb.table("subscriptions").update({"plan": "free", "status": "lapsed"}).eq("user_id", user_id).execute()
                     plan = "free"
 
-            limits = {"free": 31, "solo": 999, "pro": 999999}
+            limits = {"free": 31, "solo": 999, "pro": 9999}
             max_sessions = limits.get(plan, 31)
 
             # Check usage this month
