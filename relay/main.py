@@ -112,7 +112,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
     if sb:
         try:
             # Validate project key
-            project_resp = sb.table("projects").select("id, user_id, domain, allow_guests").eq("project_key", project_key).execute()
+            project_resp = sb.table("projects").select("id, user_id, domain, allow_guests, deleted_at").eq("project_key", project_key).execute()
             rows = [r for r in (project_resp.data or []) if r.get("deleted_at") is None]
             if not rows:
                 return {
