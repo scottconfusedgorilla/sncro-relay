@@ -12,20 +12,42 @@ class SessionStore:
         self.expiry_seconds = expiry_minutes * 60
         self._sessions: dict[str, dict] = {}
 
-    def _new_session(self, secret: str = "") -> dict:
+    def _new_session(self, secret: str = "", db_id: str = "") -> dict:
         return {
             "created_at": time.time(),
             "last_seen": time.time(),
             "secret": secret,
+            "db_id": db_id,
             "snapshot": None,
+            "connected": False,
+            "tools_used": set(),
             "requests": deque(),
             "responses": {},
         }
 
-    def ensure_session(self, key: str, secret: str = "") -> None:
+    def ensure_session(self, key: str, secret: str = "", db_id: str = "") -> None:
         if key not in self._sessions:
-            self._sessions[key] = self._new_session(secret=secret)
+            self._sessions[key] = self._new_session(secret=secret, db_id=db_id)
         self._sessions[key]["last_seen"] = time.time()
+
+    def get_db_id(self, key: str) -> str:
+        return self._sessions.get(key, {}).get("db_id", "")
+
+    def record_tool(self, key: str, tool_name: str) -> None:
+        if key in self._sessions:
+            self._sessions[key]["tools_used"].add(tool_name)
+
+    def get_tools_used(self, key: str) -> list[str]:
+        if key in self._sessions:
+            return list(self._sessions[key]["tools_used"])
+        return []
+
+    def mark_connected(self, key: str) -> bool:
+        """Mark session as connected. Returns True if this is the first connection."""
+        if key in self._sessions and not self._sessions[key]["connected"]:
+            self._sessions[key]["connected"] = True
+            return True
+        return False
 
     def verify_secret(self, key: str, secret: str) -> bool:
         """Check if the secret matches. Returns True if no secret was set (legacy)."""

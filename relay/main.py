@@ -178,7 +178,22 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
 
     session_key = secrets.token_hex(16)  # 32 hex chars
     session_secret = secrets.token_hex(16)  # 32 hex chars — only Claude knows this
-    store.ensure_session(session_key, secret=session_secret)
+
+    # Log session to database
+    db_id = ""
+    if sb and project:
+        try:
+            sess_resp = sb.table("sessions").insert({
+                "project_id": project["id"],
+                "session_key": session_key,
+                "git_user": git_user or None,
+            }).execute()
+            if sess_resp.data:
+                db_id = sess_resp.data[0]["id"]
+        except Exception:
+            pass  # Don't block session creation if logging fails
+
+    store.ensure_session(session_key, secret=session_secret, db_id=db_id)
 
     # Build the full enable URL if we have the domain
     domain = project["domain"] if sb and project else None
@@ -205,12 +220,50 @@ def _check_secret(key: str, secret: str) -> dict | None:
     return None
 
 
+def _update_session_activity(key: str) -> None:
+    """Update session activity in database (non-blocking best-effort)."""
+    db_id = store.get_db_id(key)
+    if not db_id:
+        return
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        updates = {
+            "last_activity_at": datetime.now(timezone.utc).isoformat(),
+            "tools_used": store.get_tools_used(key),
+        }
+        sb.table("sessions").update(updates).eq("id", db_id).execute()
+    except Exception:
+        pass
+
+
+def _mark_session_connected(key: str) -> None:
+    """Mark session as connected in database when browser first sends data."""
+    if not store.mark_connected(key):
+        return  # Already marked
+    db_id = store.get_db_id(key)
+    if not db_id:
+        return
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        sb.table("sessions").update({
+            "connected_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", db_id).execute()
+    except Exception:
+        pass
+
+
 async def _send_browser_request(key: str, secret: str, tool: str, params: dict | None = None) -> dict:
     """Post a request to the store and wait for the browser's response."""
     err = _check_secret(key, secret)
     if err:
         return err
     store.ensure_session(key)
+    store.record_tool(key, tool)
+    _update_session_activity(key)
     request_id = uuid.uuid4().hex[:12]
     store.add_request(key, {
         "request_id": request_id,
@@ -239,6 +292,8 @@ async def get_console_logs(key: str, secret: str) -> dict:
     if err:
         return err
     store.ensure_session(key)
+    store.record_tool(key, "get_console_logs")
+    _update_session_activity(key)
     snapshot = store.get_snapshot(key)
     if snapshot is None:
         return {"error": "No data yet. Is the browser page open with sncro enabled?"}
@@ -428,6 +483,7 @@ async def push_snapshot(key: str, payload: SnapshotPayload):
     """agent.js pushes baseline data (console, errors)."""
     store.ensure_session(key)
     store.set_snapshot(key, payload.model_dump())
+    _mark_session_connected(key)
     return {"ok": True}
 
 
