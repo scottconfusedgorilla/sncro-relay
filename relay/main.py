@@ -179,10 +179,22 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
     session_key = secrets.token_hex(16)  # 32 hex chars
     session_secret = secrets.token_hex(16)  # 32 hex chars — only Claude knows this
     store.ensure_session(session_key, secret=session_secret)
+
+    # Build the full enable URL if we have the domain
+    domain = project["domain"] if sb and project else None
+    if domain:
+        # Ensure domain has a protocol
+        if not domain.startswith("http"):
+            domain = "https://" + domain
+        enable_url = f"{domain.rstrip('/')}/sncro/enable/{session_key}"
+    else:
+        enable_url = f"<app_domain>/sncro/enable/{session_key}"
+
     return {
         "session_key": session_key,
         "session_secret": session_secret,
-        "instructions": f"Tell the user to paste this URL in their browser: <app_domain>/sncro/enable/{session_key}",
+        "enable_url": enable_url,
+        "instructions": f"Tell the user to paste this URL in their browser: {enable_url}",
     }
 
 
@@ -310,15 +322,23 @@ async def get_page_snapshot(key: str, secret: str) -> dict:
 
 @mcp.tool()
 async def check_session(key: str, secret: str) -> dict:
-    """Check if a sncro session is active.
+    """Check the status of a sncro session.
 
-    Use this to verify the browser has sncro enabled before
-    making other queries.
+    Returns:
+        status: "not_found" | "waiting" | "connected"
+        - not_found: session key doesn't exist
+        - waiting: session created but browser hasn't connected yet
+        - connected: browser is actively sending data
     """
     err = _check_secret(key, secret)
     if err:
         return err
-    return {"active": store.has_session(key)}
+    if not store.has_session(key):
+        return {"active": False, "status": "not_found"}
+    snapshot = store.get_snapshot(key)
+    if snapshot is None:
+        return {"active": True, "status": "waiting"}
+    return {"active": True, "status": "connected"}
 
 
 @mcp.tool()
