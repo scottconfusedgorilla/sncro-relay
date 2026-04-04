@@ -21,29 +21,25 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 
 # --- Intentionally buggy sports dashboard ---
 
-SPORTS_API = "https://www.thesportsdb.com/api/v1/json/3/eventsday.php"
+SPORTS_API = "https://www.thesportsdb.com/api/v1/json/3"
 
 
 async def fetch_scores():
-    """Fetch sports events. Intentional bug: no timeout, no error handling."""
-    # Try today first, fall back through recent days to find games
+    """Fetch recent sports events. Intentional bug: no timeout, no error handling."""
     async with httpx.AsyncClient() as client:
-        all_events = []
-        for offset in range(0, 4):
-            d = (date.today() - timedelta(days=offset)).isoformat()
-            # Bug 1: Fetches sequentially instead of in parallel
-            nba = await client.get(f"{SPORTS_API}?d={d}&l=NBA")
-            nhl = await client.get(f"{SPORTS_API}?d={d}&l=NHL")
-            mlb = await client.get(f"{SPORTS_API}?d={d}&l=MLB")
-            epl = await client.get(f"{SPORTS_API}?d={d}&l=English_Premier_League")
+        # Bug 1: Fetches sequentially instead of in parallel
+        # Each of these is a separate HTTP round-trip that could run concurrently
+        r1 = await client.get(f"{SPORTS_API}/eventspastleague.php?id=4328")  # EPL
+        r2 = await client.get(f"{SPORTS_API}/eventspastleague.php?id=4387")  # NBA
+        r3 = await client.get(f"{SPORTS_API}/eventspastleague.php?id=4380")  # NHL
+        r4 = await client.get(f"{SPORTS_API}/eventspastleague.php?id=4424")  # MLB
 
-            for resp in [nba, nhl, mlb, epl]:
-                if resp.status_code == 200:
-                    data = resp.json()
-                    all_events.extend(data.get("events") or [])
-            if all_events:
-                break  # Found games, stop looking
-        return all_events
+        events = []
+        for resp in [r1, r2, r3, r4]:
+            if resp.status_code == 200:
+                data = resp.json()
+                events.extend(data.get("events") or [])
+        return events[:15]  # Cap at 15 for display
 
 
 @app.get("/", response_class=HTMLResponse)
