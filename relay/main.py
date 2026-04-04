@@ -212,9 +212,10 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
 SETUP:
   1. Tell the user to paste this URL in their browser: {enable_url}
   2. Use check_session to confirm they're connected (status: "connected")
-  3. Pass both session_key and session_secret to every subsequent tool call
+  3. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
 
-{f"MOBILE TESTING: Open {qr_url} on any screen — user scans the QR code with their phone and sncro is live on mobile in seconds. No app install needed." if qr_url else ""}
+IMPORTANT: Each session key is single-use — one key, one browser/device. Once a key is consumed, it cannot be reused.
+{f"MOBILE TESTING: To debug on mobile, call create_session again for a separate key. Tell the user to open the qr_url on their desktop and scan it with their phone. You can then inspect desktop and mobile independently." if qr_url else ""}
 
 YOUR TOOLS:
   get_console_logs — Browser console output and JS errors (including unhandled exceptions and promise rejections). Check this FIRST when something looks wrong.
@@ -575,6 +576,16 @@ async def get_response(key: str, request_id: str, timeout: int = LONG_POLL_TIMEO
 async def session_status(key: str):
     """Check if a session key is active."""
     return {"active": store.has_session(key)}
+
+
+@app.post("/session/{key}/consume")
+async def consume_session(key: str):
+    """Mark a session key as consumed (bound to one browser). Returns error if already consumed."""
+    if not store.has_session(key):
+        raise HTTPException(404, "Session not found")
+    if not store.consume(key):
+        raise HTTPException(409, "This session key has already been used. Ask Claude to create a new session.")
+    return {"ok": True}
 
 
 # --- Client downloads ---

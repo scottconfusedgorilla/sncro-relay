@@ -20,6 +20,7 @@ class SessionStore:
             "db_id": db_id,
             "snapshot": None,
             "connected": False,
+            "consumed": False,
             "tools_used": set(),
             "requests": deque(),
             "responses": {},
@@ -48,6 +49,18 @@ class SessionStore:
             self._sessions[key]["connected"] = True
             return True
         return False
+
+    def consume(self, key: str) -> bool:
+        """Mark session as consumed (bound to a browser). Returns False if already consumed."""
+        if key in self._sessions:
+            if self._sessions[key]["consumed"]:
+                return False
+            self._sessions[key]["consumed"] = True
+            return True
+        return False
+
+    def is_consumed(self, key: str) -> bool:
+        return self._sessions.get(key, {}).get("consumed", False)
 
     def verify_secret(self, key: str, secret: str) -> bool:
         """Check if the secret matches. Returns True if no secret was set (legacy)."""

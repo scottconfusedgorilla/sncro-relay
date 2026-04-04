@@ -10,6 +10,8 @@ Usage:
 """
 
 import secrets
+import urllib.request
+import urllib.error
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
@@ -25,6 +27,7 @@ class SncroMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, relay_url: str = "https://sncro.net"):
         super().__init__(app)
         self.relay_url = relay_url.rstrip("/")
+        app._sncro_relay_url = self.relay_url
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
@@ -66,8 +69,36 @@ sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 
 
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
-async def sncro_enable(key: str):
+async def sncro_enable(key: str, request: Request):
     """Enable sncro with a key from Claude's create_session tool."""
+    relay_url = getattr(request.app, '_sncro_relay_url', 'https://relay.sncro.net')
+    try:
+        req = urllib.request.Request(f"{relay_url}/session/{key}/consume", method="POST", data=b"")
+        urllib.request.urlopen(req, timeout=5)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            return HTMLResponse(content="""<!DOCTYPE html>
+<html><head><title>sncro — key already used</title>
+<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
+.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
+.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
+<body><h2>sncro</h2>
+<p class="status">This key has already been used</p>
+<p class="hint">Each session key can only be used in one browser.<br>Ask Claude to create a new session.</p>
+</body></html>""")
+        if e.code == 404:
+            return HTMLResponse(content="""<!DOCTYPE html>
+<html><head><title>sncro — key not found</title>
+<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
+.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
+.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
+<body><h2>sncro</h2>
+<p class="status">Session not found or expired</p>
+<p class="hint">Sessions last 30 minutes. Ask Claude to create a new session.</p>
+</body></html>""")
+    except Exception:
+        pass  # If relay is unreachable, allow enabling anyway
+
     html = """<!DOCTYPE html>
 <html><head><title>sncro enabled</title>
 <style>
@@ -107,7 +138,7 @@ async def sncro_enable(key: str):
 
 @sncro_routes.get("/enable/{key}/qrcode", response_class=HTMLResponse)
 async def sncro_qrcode(key: str, request: Request):
-    """Show a QR code for the enable URL — scan with phone to enable on mobile."""
+    """Show a QR code for the enable URL — each key is single-use per device."""
     base = str(request.base_url).rstrip("/")
     enable_url = f"{base}/sncro/enable/{key}"
     html = """<!DOCTYPE html>
@@ -122,14 +153,13 @@ async def sncro_qrcode(key: str, request: Request):
   a { color: #4f8cff; }
   canvas { display: block; }
 </style>
-<!-- qr.js — minimal QR code generator (MIT license) -->
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 </head>
 <body>
   <h2>sncro</h2>
-  <p>Scan to enable on your mobile device</p>
+  <p>Scan to enable on your device</p>
   <div class="qr-wrap"><canvas id="qr"></canvas></div>
-  <p class="hint">URL: <a href="ENABLE_URL">ENABLE_URL</a></p>
+  <p class="hint">This key can only be used once.<br>Ask Claude for a new session to debug another device.</p>
   <p class="countdown">This page closes in <span id="count">30</span> seconds</p>
   <script>
     var qr = qrcode(0, 'M');
