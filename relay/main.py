@@ -207,12 +207,37 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
 
     qr_url = f"{enable_url}/qrcode" if enable_url and "<app_domain>" not in enable_url else None
 
+    guide = f"""SESSION CREATED SUCCESSFULLY — here's everything you need:
+
+SETUP:
+  1. Tell the user to paste this URL in their browser: {enable_url}
+  2. Use check_session to confirm they're connected (status: "connected")
+  3. Pass both session_key and session_secret to every subsequent tool call
+
+{f"MOBILE TESTING: Open {qr_url} on any screen — user scans the QR code with their phone and sncro is live on mobile in seconds. No app install needed." if qr_url else ""}
+
+YOUR TOOLS:
+  get_console_logs — Browser console output and JS errors (including unhandled exceptions and promise rejections). Check this FIRST when something looks wrong.
+  get_network_log — Network performance: resource timing, durations, sizes, sorted slowest-first. Find slow API calls, large assets, sequential fetches that should be parallel. Filter by type (fetch, script, img, css).
+  query_element — Deep-inspect one DOM element by CSS selector. Returns bounding rect, attributes, computed styles, inner text, child count. Use for layout debugging, visibility issues, positioning problems.
+  query_all — Query all matching elements. Great for checking lists, grids, repeated components, or counting elements.
+  get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
+  check_session — Verify connection status: "not_found", "waiting", or "connected".
+  report_issue — Submit bugs, feature requests, or success stories to the sncro team. For success stories: ask the user first, draft the text, get explicit approval before submitting.
+
+TIPS:
+  - get_page_snapshot first to orient, then drill down with query_element
+  - Always check get_console_logs for JS errors — they often explain visual bugs
+  - get_network_log reveals performance issues invisible to the eye
+  - Use computed styles in query_element to catch CSS issues (overflow, visibility, z-index)
+  - For mobile bugs, have the user scan the QR code — you'll see the actual mobile viewport and layout"""
+
     return {
         "session_key": session_key,
         "session_secret": session_secret,
         "enable_url": enable_url,
         "qr_url": qr_url,
-        "instructions": f"Tell the user to paste this URL in their browser: {enable_url}" + (f"\nFor mobile testing, they can open {qr_url} and scan the QR code with their phone." if qr_url else ""),
+        "instructions": guide,
     }
 
 
