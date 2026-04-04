@@ -39,22 +39,52 @@ def _resolve_domain(raw_domain: str) -> str:
     else:
         url = raw_domain
 
+    # Try the stored domain, then common variants
+    base = url.rstrip("/")
+    candidates = [base]
+
+    # Add www variant if not present, or non-www if www is present
+    domain_part = base.replace("https://", "").replace("http://", "")
+    if domain_part.startswith("www."):
+        candidates.append(f"https://{domain_part[4:]}")
+    else:
+        candidates.append(f"https://www.{domain_part}")
+
     try:
         with httpx.Client(follow_redirects=True, timeout=5) as client:
-            resp = client.get(f"{url.rstrip('/')}/sncro/healthcheck")
-            if resp.status_code == 200:
-                # Extract the domain from the final URL (after redirects)
-                final_url = str(resp.url)
-                # final_url is like https://www.example.com/sncro/healthcheck
-                # We want https://www.example.com
-                resolved = final_url.rsplit("/sncro/healthcheck", 1)[0]
-                _domain_cache[raw_domain] = (resolved, now)
-                return resolved
+            for candidate in candidates:
+                try:
+                    resp = client.get(f"{candidate}/sncro/healthcheck")
+                    if resp.status_code == 200:
+                        final_url = str(resp.url)
+                        resolved = final_url.rsplit("/sncro/healthcheck", 1)[0]
+                        _domain_cache[raw_domain] = (resolved, now)
+                        return resolved
+                except Exception:
+                    continue
     except Exception:
         pass
 
-    # Fallback: use the stored domain as-is
-    resolved = url.rstrip("/")
+    # Fallback: follow root redirect to discover the actual domain
+    try:
+        with httpx.Client(follow_redirects=True, timeout=5) as client:
+            resp = client.get(base)
+            if resp.status_code == 200:
+                final_url = str(resp.url).rstrip("/")
+                # Check if the redirected domain has the healthcheck
+                try:
+                    hc = client.get(f"{final_url}/sncro/healthcheck")
+                    if hc.status_code == 200:
+                        resolved = str(hc.url).rsplit("/sncro/healthcheck", 1)[0]
+                        _domain_cache[raw_domain] = (resolved, now)
+                        return resolved
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Final fallback: use the stored domain as-is
+    resolved = base
     _domain_cache[raw_domain] = (resolved, now)
     return resolved
 
