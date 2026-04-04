@@ -22,6 +22,11 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 
     relay = relay_url.rstrip("/")
 
+    @app.route("/sncro/healthcheck")
+    def sncro_healthcheck():
+        """Used by the relay to discover the canonical domain for this app."""
+        return {"ok": True}
+
     @app.route("/sncro/enable/<key>")
     def sncro_enable(key):
         # Try to consume the key (single-use)

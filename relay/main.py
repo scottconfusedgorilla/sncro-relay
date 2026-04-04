@@ -19,6 +19,45 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from relay.store import SessionStore
 
+# Cache resolved domains for 5 minutes
+_domain_cache: dict[str, tuple[str, float]] = {}
+DOMAIN_CACHE_TTL = 300  # seconds
+
+
+def _resolve_domain(raw_domain: str) -> str:
+    """Probe the middleware healthcheck to find the canonical domain.
+    Follows redirects to handle www/non-www, vanity domains, etc."""
+    import httpx
+
+    now = time.time()
+    cached = _domain_cache.get(raw_domain)
+    if cached and now - cached[1] < DOMAIN_CACHE_TTL:
+        return cached[0]
+
+    if not raw_domain.startswith("http"):
+        url = f"https://{raw_domain}"
+    else:
+        url = raw_domain
+
+    try:
+        with httpx.Client(follow_redirects=True, timeout=5) as client:
+            resp = client.get(f"{url.rstrip('/')}/sncro/healthcheck")
+            if resp.status_code == 200:
+                # Extract the domain from the final URL (after redirects)
+                final_url = str(resp.url)
+                # final_url is like https://www.example.com/sncro/healthcheck
+                # We want https://www.example.com
+                resolved = final_url.rsplit("/sncro/healthcheck", 1)[0]
+                _domain_cache[raw_domain] = (resolved, now)
+                return resolved
+    except Exception:
+        pass
+
+    # Fallback: use the stored domain as-is
+    resolved = url.rstrip("/")
+    _domain_cache[raw_domain] = (resolved, now)
+    return resolved
+
 # Optional Supabase for quota enforcement (relay works without it for local dev)
 _supabase_client = None
 
@@ -195,13 +234,11 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
 
     store.ensure_session(session_key, secret=session_secret, db_id=db_id)
 
-    # Build the full enable URL if we have the domain
-    domain = project["domain"] if sb and project else None
-    if domain:
-        # Ensure domain has a protocol
-        if not domain.startswith("http"):
-            domain = "https://" + domain
-        enable_url = f"{domain.rstrip('/')}/sncro/enable/{session_key}"
+    # Build the full enable URL — resolve the actual canonical domain
+    raw_domain = project["domain"] if sb and project else None
+    if raw_domain:
+        canonical = _resolve_domain(raw_domain)
+        enable_url = f"{canonical}/sncro/enable/{session_key}"
     else:
         enable_url = f"<app_domain>/sncro/enable/{session_key}"
 

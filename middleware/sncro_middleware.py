@@ -68,6 +68,12 @@ class SncroMiddleware(BaseHTTPMiddleware):
 sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 
 
+@sncro_routes.get("/healthcheck")
+async def sncro_healthcheck():
+    """Used by the relay to discover the canonical domain for this app."""
+    return {"ok": True}
+
+
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
 async def sncro_enable(key: str, request: Request):
     """Enable sncro with a key from Claude's create_session tool."""
