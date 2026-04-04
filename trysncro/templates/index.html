@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SportsDash — Live Scores</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">SportsDash</div>
+    <div class="nav-links">
+      <a href="/">Scores</a>
+      <a href="#standings">Standings</a>
+      <a href="#schedule">Schedule</a>
+      <!-- Bug 3: settings link goes nowhere, invisible on dark bg -->
+      <a href="/settings" class="settings-link">Settings</a>
+    </div>
+  </nav>
+
+  <main class="container">
+    <h1>Today's Scores</h1>
+
+    <!-- Bug 4: refresh button triggers a JS error -->
+    <button class="btn refresh-btn" onclick="refreshScores()">Refresh Scores</button>
+
+    <div class="score-grid">
+      {% for event in events %}
+      <div class="score-card">
+        <div class="league-badge">{{ event.strLeague or 'Unknown' }}</div>
+        <div class="teams">
+          <div class="team home">
+            <span class="team-name">{{ event.strHomeTeam }}</span>
+            <span class="team-score">{{ event.intHomeScore if event.intHomeScore is not none else '-' }}</span>
+          </div>
+          <div class="vs">vs</div>
+          <div class="team away">
+            <span class="team-name">{{ event.strAwayTeam }}</span>
+            <span class="team-score">{{ event.intAwayScore if event.intAwayScore is not none else '-' }}</span>
+          </div>
+        </div>
+        <div class="event-status">{{ event.strStatus or event.strTime or '' }}</div>
+        <!-- Bug 5: venue text overflows card on long names -->
+        <div class="venue">{{ event.strVenue or '' }}</div>
+      </div>
+      {% endfor %}
+
+      {% if not events %}
+      <div class="no-events">
+        <p>No games found for today.</p>
+        <p>Try refreshing or check back later!</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Bug 6: this section is clipped by overflow:hidden on parent -->
+    <section class="stats-panel" id="standings">
+      <h2>Quick Stats</h2>
+      <div class="stats-scroll">
+        <div class="stat-item">Total Events: <strong>{{ events|length }}</strong></div>
+        <div class="stat-item">NBA Games: <strong>{{ events|selectattr('strLeague', 'equalto', 'NBA')|list|length }}</strong></div>
+        <div class="stat-item">NHL Games: <strong>{{ events|selectattr('strLeague', 'equalto', 'NHL')|list|length }}</strong></div>
+        <div class="stat-item">MLB Games: <strong>{{ events|selectattr('strLeague', 'equalto', 'MLB')|list|length }}</strong></div>
+        <div class="stat-item">EPL Games: <strong>{{ events|selectattr('strLeague', 'equalto', 'English Premier League')|list|length }}</strong></div>
+        <div class="stat-item">Completed: <strong id="completed-count">—</strong></div>
+        <div class="stat-item">In Progress: <strong id="live-count">—</strong></div>
+        <div class="stat-item">Upcoming: <strong id="upcoming-count">—</strong></div>
+      </div>
+    </section>
+
+    <!-- Sncro try instructions -->
+    <section class="try-sncro">
+      <h2>Debug this page with sncro</h2>
+      <p>This page has <strong>real bugs</strong>. Use your Claude to find them.</p>
+      <ol>
+        <li>Make sure you have <a href="https://www.sncro.net" target="_blank">sncro</a> MCP configured in your <code>~/.claude.json</code></li>
+        <li>Copy this to your Claude conversation:</li>
+      </ol>
+      <div class="copy-block">
+        <pre id="try-instructions">I'm on try.sncro.net — a deliberately broken sports dashboard.
+Use the sncro MCP tools to find the bugs on this page.
+
+Project key: TRY_PROJECT_KEY
+Call create_session with this key, then tell me to paste the enable URL.
+Once connected, use get_page_snapshot, get_console_logs, get_network_log,
+query_element, and query_all to find every bug you can.</pre>
+        <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('try-instructions').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+      </div>
+      <p class="hint">No account needed. Your Claude connects directly via MCP.</p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>SportsDash is a demo app by <a href="https://www.sncro.net">sncro</a> — built to be debugged.</p>
+    <p class="build-number">build 001</p>
+  </footer>
+
+  <script>
+    // Bug 4: refreshScores is defined wrong — references undefined variable
+    function refreshScores() {
+      const endpoint = apiConfig.scoresUrl;  // apiConfig is never defined
+      fetch(endpoint)
+        .then(r => r.json())
+        .then(data => {
+          document.querySelector('.score-grid').innerHTML = 'Refreshed!';
+        });
+    }
+
+    // Bug 7: this runs on load and throws because element doesn't exist yet sometimes
+    document.getElementById('completed-count').textContent =
+      document.querySelectorAll('.event-status').length;
+
+    // Bug 8: fetch on page load — sequential, slow, duplicates server-side fetch
+    fetch('/api/scores')
+      .then(r => r.json())
+      .then(data => {
+        // Intentionally does nothing useful with the data — wasted network call
+        console.log('Fetched', data.count, 'scores from API');
+      });
+  </script>
+</body>
+</html>
