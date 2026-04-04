@@ -78,7 +78,8 @@
       <div class="setup-tabs">
         <button class="setup-tab active" onclick="showSetup('claude', this)">Claude Code</button>
         <button class="setup-tab" onclick="showSetup('copilot', this)">GitHub Copilot</button>
-        <button class="setup-tab" onclick="showSetup('other', this)">Other MCP tools</button>
+        <button class="setup-tab" onclick="showSetup('cursor', this)">Cursor</button>
+        <button class="setup-tab" onclick="showSetup('other', this)">Other</button>
       </div>
 
       <div id="setup-claude" class="setup-panel active">
@@ -104,6 +105,21 @@
           <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-copilot').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
         </div>
         <p class="hint">Then reload: Ctrl+Shift+P &rarr; "Developer: Reload Window"</p>
+      </div>
+
+      <div id="setup-cursor" class="setup-panel">
+        <p>Create <code>.cursor/mcp.json</code> in your project root:</p>
+        <div class="copy-block">
+          <pre id="mcp-cursor">{
+  "mcpServers": {
+    "sncro": {
+      "url": "https://relay.sncro.net/tools/mcp"
+    }
+  }
+}</pre>
+          <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-cursor').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+        </div>
+        <p class="hint">Reload Cursor, then enable sncro in Settings &rarr; MCP.</p>
       </div>
 
       <div id="setup-other" class="setup-panel">
