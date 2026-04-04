@@ -72,21 +72,24 @@
     <section class="try-sncro">
       <h2>Debug this page with sncro</h2>
       <p>This page has <strong>real bugs</strong>. Use your Claude to find them.</p>
-      <ol>
-        <li>Make sure you have <a href="https://www.sncro.net" target="_blank">sncro</a> MCP configured in your <code>~/.claude.json</code></li>
-        <li>Copy this to your Claude conversation:</li>
-      </ol>
-      <div class="copy-block">
-        <pre id="try-instructions">I'm on try.sncro.net — a deliberately broken sports dashboard.
-Use the sncro MCP tools to find the bugs on this page.
 
-Project key: b7a20c0797d72596
-Call create_session with this key, then tell me to paste the enable URL.
-Once connected, use get_page_snapshot, get_console_logs, get_network_log,
-query_element, and query_all to find every bug you can.</pre>
+      <h3>Step 1: Add the sncro MCP server</h3>
+      <p>Run this once in your terminal:</p>
+      <div class="copy-block">
+        <pre id="mcp-command">claude mcp add --transport http sncro https://relay.sncro.net/tools/mcp</pre>
+        <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-command').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+      </div>
+      <p class="hint">Then restart Claude Code (Ctrl+Shift+P &rarr; "Developer: Reload Window").</p>
+
+      <h3>Step 2: Tell Claude to debug this page</h3>
+      <p>Paste this into your Claude conversation:</p>
+      <div class="copy-block">
+        <pre id="try-instructions">I'm debugging a web app at try.sncro.net. The scrolling is broken and a button doesn't work. Please use the sncro MCP tools to inspect my browser — the project key is b7a20c0797d72596. Don't try to find or edit source files, just diagnose the bugs.</pre>
         <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('try-instructions').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
       </div>
       <p class="hint">No account needed. Your Claude connects directly via MCP.</p>
+
+      <p style="margin-top:1.5rem;"><a href="https://www.sncro.net/demo">Watch a demo</a> of what happens next &rarr;</p>
     </section>
   </main>
 
