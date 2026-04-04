@@ -215,7 +215,14 @@ SETUP:
   3. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
 
 IMPORTANT: Each session key is single-use — one key, one browser/device. Once a key is consumed, it cannot be reused.
-{f"MOBILE TESTING: To debug on mobile, call create_session again for a separate key. Tell the user to open the qr_url on their desktop and scan it with their phone. You can then inspect desktop and mobile independently." if qr_url else ""}
+{f"""MOBILE / PWA / TABLET:
+  If the user is on a phone, tablet, or PWA (no address bar), do NOT ask them to paste a URL.
+  Instead: call create_session again to get a SEPARATE key for the mobile device, then tell the
+  user to open this QR code URL on their DESKTOP screen and scan it with their phone's camera:
+    {qr_url}
+  The QR code contains the enable URL — scanning it opens the link and activates sncro on that device.
+  You can then inspect desktop and mobile independently with separate keys.
+  This also works for Capacitor apps, embedded WebViews, and any browser on any device.""" if qr_url else ""}
 
 YOUR TOOLS:
   get_console_logs — Browser console output and JS errors (including unhandled exceptions and promise rejections). Check this FIRST when something looks wrong.
