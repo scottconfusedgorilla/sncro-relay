@@ -213,6 +213,42 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
   margin-top: 8px;
 }
 
+/* Setup tabs */
+.setup-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+.setup-tab {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 0.9em;
+  border-bottom: none;
+}
+.setup-tab.active {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.setup-panel {
+  display: none;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 0 8px 8px 8px;
+  margin-bottom: 16px;
+}
+.setup-panel.active { display: block; }
+.setup-panel code {
+  background: rgba(255,255,255,0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
 /* Footer */
 .footer {
   text-align: center;

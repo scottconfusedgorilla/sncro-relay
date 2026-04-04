@@ -71,23 +71,59 @@
     <!-- Sncro try instructions -->
     <section class="try-sncro">
       <h2>Debug this page with sncro</h2>
-      <p>This page has <strong>real bugs</strong>. Use your Claude to find them.</p>
+      <p>This page has <strong>real bugs</strong>. Use your AI to find them.</p>
 
-      <h3>Step 1: Add the sncro MCP server</h3>
-      <p>Run this once in your terminal:</p>
-      <div class="copy-block">
-        <pre id="mcp-command">claude mcp add --transport http sncro https://relay.sncro.net/tools/mcp</pre>
-        <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-command').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+      <h3>Step 1: Add the sncro MCP server (one time only)</h3>
+
+      <div class="setup-tabs">
+        <button class="setup-tab active" onclick="showSetup('claude')">Claude Code</button>
+        <button class="setup-tab" onclick="showSetup('copilot')">GitHub Copilot</button>
+        <button class="setup-tab" onclick="showSetup('other')">Other MCP tools</button>
       </div>
-      <p class="hint">Then restart Claude Code (Ctrl+Shift+P &rarr; "Developer: Reload Window").</p>
 
-      <h3>Step 2: Tell Claude to debug this page</h3>
-      <p>Paste this into your Claude conversation:</p>
+      <div id="setup-claude" class="setup-panel active">
+        <p>Run this in your terminal:</p>
+        <div class="copy-block">
+          <pre id="mcp-claude">claude mcp add --transport http sncro https://relay.sncro.net/tools/mcp</pre>
+          <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-claude').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+        </div>
+        <p class="hint">Then reload: Ctrl+Shift+P &rarr; "Developer: Reload Window"</p>
+      </div>
+
+      <div id="setup-copilot" class="setup-panel">
+        <p>Create <code>mcp.json</code> in your workspace root:</p>
+        <div class="copy-block">
+          <pre id="mcp-copilot">{
+  "servers": {
+    "sncro": {
+      "type": "http",
+      "url": "https://relay.sncro.net/tools/mcp"
+    }
+  }
+}</pre>
+          <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-copilot').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+        </div>
+        <p class="hint">Then reload: Ctrl+Shift+P &rarr; "Developer: Reload Window"</p>
+      </div>
+
+      <div id="setup-other" class="setup-panel">
+        <p>Add this MCP server to your tool's configuration:</p>
+        <div class="copy-block">
+          <pre id="mcp-other">Server name: sncro
+Type: http
+URL: https://relay.sncro.net/tools/mcp</pre>
+          <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-other').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+        </div>
+        <p class="hint">Works with any MCP-compatible tool: Cursor, Windsurf, Cline, etc.</p>
+      </div>
+
+      <h3>Step 2: Tell your AI to debug this page</h3>
+      <p>Paste this into your conversation:</p>
       <div class="copy-block">
         <pre id="try-instructions">I'm debugging a web app at try.sncro.net. The scrolling is broken and a button doesn't work. Please use the sncro MCP tools to inspect my browser — the project key is b7a20c0797d72596. Don't try to find or edit source files, just diagnose the bugs.</pre>
         <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('try-instructions').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
       </div>
-      <p class="hint">No account needed. Your Claude connects directly via MCP.</p>
+      <p class="hint">No account needed. Your AI connects directly via MCP.</p>
 
       <p style="margin-top:1.5rem;"><a href="https://www.sncro.net/demo">Watch a demo</a> of what happens next &rarr;</p>
     </section>
@@ -120,6 +156,14 @@
         // Intentionally does nothing useful with the data — wasted network call
         console.log('Fetched', data.count, 'scores from API');
       });
+
+    // Setup tabs
+    function showSetup(id) {
+      document.querySelectorAll('.setup-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.setup-tab').forEach(t => t.classList.remove('active'));
+      document.getElementById('setup-' + id).classList.add('active');
+      event.target.classList.add('active');
+    }
   </script>
 </body>
 </html>
