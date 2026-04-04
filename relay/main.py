@@ -205,11 +205,14 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
     else:
         enable_url = f"<app_domain>/sncro/enable/{session_key}"
 
+    qr_url = f"{enable_url}/qrcode" if enable_url and "<app_domain>" not in enable_url else None
+
     return {
         "session_key": session_key,
         "session_secret": session_secret,
         "enable_url": enable_url,
-        "instructions": f"Tell the user to paste this URL in their browser: {enable_url}",
+        "qr_url": qr_url,
+        "instructions": f"Tell the user to paste this URL in their browser: {enable_url}" + (f"\nFor mobile testing, they can open {qr_url} and scan the QR code with their phone." if qr_url else ""),
     }
 
 

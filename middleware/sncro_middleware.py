@@ -105,6 +105,67 @@ async def sncro_enable(key: str):
     return response
 
 
+@sncro_routes.get("/enable/{key}/qrcode", response_class=HTMLResponse)
+async def sncro_qrcode(key: str, request: Request):
+    """Show a QR code for the enable URL — scan with phone to enable on mobile."""
+    base = str(request.base_url).rstrip("/")
+    enable_url = f"{base}/sncro/enable/{key}"
+    html = """<!DOCTYPE html>
+<html><head><title>sncro — scan to enable</title>
+<style>
+  body { font-family: system-ui; max-width: 500px; margin: 60px auto; text-align: center;
+         background: #0a0e1a; color: #e0e0e0; }
+  .qr-wrap { background: #fff; display: inline-block; padding: 24px; border-radius: 12px; margin: 20px 0; }
+  .hint { color: #888; margin-top: 16px; line-height: 1.6; font-size: 0.9em; }
+  .countdown { color: #888; margin-top: 12px; }
+  .countdown span { font-weight: bold; color: #e0e0e0; }
+  a { color: #4f8cff; }
+  canvas { display: block; }
+</style>
+<!-- qr.js — minimal QR code generator (MIT license) -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+</head>
+<body>
+  <h2>sncro</h2>
+  <p>Scan to enable on your mobile device</p>
+  <div class="qr-wrap"><canvas id="qr"></canvas></div>
+  <p class="hint">URL: <a href="ENABLE_URL">ENABLE_URL</a></p>
+  <p class="countdown">This page closes in <span id="count">30</span> seconds</p>
+  <script>
+    var qr = qrcode(0, 'M');
+    qr.addData('ENABLE_URL');
+    qr.make();
+    var canvas = document.getElementById('qr');
+    var ctx = canvas.getContext('2d');
+    var size = qr.getModuleCount();
+    var scale = 8;
+    canvas.width = size * scale;
+    canvas.height = size * scale;
+    for (var r = 0; r < size; r++)
+      for (var c = 0; c < size; c++)
+        if (qr.isDark(r, c)) {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(c * scale, r * scale, scale, scale);
+        }
+
+    var n = 30;
+    var el = document.getElementById('count');
+    var t = setInterval(function() {
+      n--;
+      el.textContent = n;
+      if (n <= 0) {
+        clearInterval(t);
+        var ref = document.referrer;
+        if (ref && ref.indexOf('/sncro/') === -1) location.href = ref;
+        else location.href = '/';
+      }
+    }, 1000);
+  </script>
+</body></html>""".replace("ENABLE_URL", enable_url)
+
+    return HTMLResponse(content=html)
+
+
 @sncro_routes.get("/disable", response_class=HTMLResponse)
 async def sncro_disable():
     """Disable sncro for this browser session."""
