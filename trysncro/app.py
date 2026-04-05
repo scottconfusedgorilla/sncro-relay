@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-app = FastAPI(debug=False)  # TESTING: prove sncro vanishes in production
+app = FastAPI(debug=True)  # debug=True — this is the demo app, sncro is always active
 
 if app.debug:
     from middleware.sncro_middleware import SncroMiddleware, sncro_routes
