@@ -287,6 +287,7 @@ SETUP:
   3. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
 
 IMPORTANT: Each session key is single-use — one key, one browser/device. Once a key is consumed, it cannot be reused.
+NOTE: The app must be running in debug mode for sncro to work (e.g. FastAPI: app.debug=True, Flask: FLASK_DEBUG=1). If the enable URL shows "Debug mode is off", tell the user to enable debug mode and redeploy.
 {f"""MOBILE / PWA / TABLET:
   If the user is on a phone, tablet, or PWA (no address bar), do NOT ask them to paste a URL.
   Instead: call create_session again to get a SEPARATE key for the mobile device, then tell the
