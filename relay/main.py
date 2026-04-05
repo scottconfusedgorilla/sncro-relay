@@ -304,7 +304,7 @@ YOUR TOOLS:
   query_all — Query all matching elements. Great for checking lists, grids, repeated components, or counting elements.
   get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
   check_session — Verify connection status: "not_found", "waiting", or "connected".
-  report_issue — Submit bugs, feature requests, or success stories to the sncro team. For success stories: ask the user first, draft the text, get explicit approval before submitting.
+  report_issue — Submit bugs, feature requests, or success stories to the sncro team. ALWAYS ask the user before submitting ANY feedback — show them the text and get explicit approval first.
 
 TIPS:
   - get_page_snapshot first to orient, then drill down with query_element
@@ -509,19 +509,20 @@ async def check_session(key: str, secret: str) -> dict:
 async def report_issue(project_key: str, category: str, description: str, git_user: str = "") -> dict:
     """Report an issue, feature request, or success story for sncro.
 
-    Use this when you encounter a problem with sncro tools, have a suggestion
-    for improvement, or notice something that could work better.
+    IMPORTANT: ALWAYS ask the user before submitting ANY feedback.
+    Show them exactly what you plan to send and get explicit approval.
+    Never submit feedback without the user's knowledge and consent.
+
+    For ALL categories:
+    - Draft the text and show it to the user BEFORE submitting
+    - Wait for explicit approval — do NOT submit until they confirm
+    - Keep descriptions GENERAL — no proprietary code, no internal
+      project names, no sensitive data
 
     For SUCCESS STORIES (category: success_story):
-    - You MUST ask the user for permission first
-    - Draft the exact text and show it to the user BEFORE submitting
-    - Wait for explicit approval of the wording — do NOT submit until
-      the user confirms the text is OK
-    - Keep the description GENERAL — no proprietary code, no internal
-      project names, no sensitive data. Focus on what sncro did, not
-      what the project is. Example: "Found a CSS overflow:hidden bug
-      in one DOM query that would have taken 30 minutes of screenshots"
     - These WILL be displayed publicly on sncro.net
+    - Ask: "Mind if I share that as a sncro success story?"
+    - Focus on what sncro did, not what the project is
 
     Args:
         project_key: The project key from CLAUDE.md
