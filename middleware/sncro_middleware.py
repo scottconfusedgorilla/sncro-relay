@@ -68,15 +68,83 @@ class SncroMiddleware(BaseHTTPMiddleware):
 sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 
 
+def _normalize_key(key: str) -> str:
+    """Strip dashes/spaces from a session key (787-221-713 -> 787221713)."""
+    return key.replace("-", "").replace(" ", "").strip()
+
+
 @sncro_routes.get("/healthcheck")
 async def sncro_healthcheck():
     """Used by the relay to discover the canonical domain for this app."""
     return {"ok": True}
 
 
+@sncro_routes.get("/enable", response_class=HTMLResponse)
+async def sncro_enable_prompt():
+    """Show a code-entry form when no key is in the URL."""
+    html = """<!DOCTYPE html>
+<html><head><title>sncro — enter code</title>
+<style>
+  body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; padding: 0 20px; }
+  h2 { margin-bottom: 8px; }
+  .hint { color: #666; margin-bottom: 30px; line-height: 1.6; }
+  .code-input { display: flex; gap: 12px; justify-content: center; margin: 30px 0; }
+  .code-input input {
+    width: 70px; height: 70px; font-size: 2em; text-align: center;
+    border: 2px solid #ddd; border-radius: 12px; font-family: monospace;
+    -moz-appearance: textfield;
+  }
+  .code-input input::-webkit-outer-spin-button,
+  .code-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .code-input input:focus { border-color: #2563eb; outline: none; }
+  .btn { padding: 12px 24px; font-size: 1em; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; }
+  .btn:hover { background: #1d4ed8; }
+</style></head>
+<body>
+  <h2>sncro</h2>
+  <p class="hint">Enter the 9-digit code from Claude</p>
+  <div class="code-input">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c1">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c2">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c3">
+  </div>
+  <button class="btn" onclick="go()">Connect</button>
+  <script>
+    var inputs = [document.getElementById('c1'), document.getElementById('c2'), document.getElementById('c3')];
+    inputs.forEach(function(inp, i) {
+      inp.addEventListener('input', function() {
+        inp.value = inp.value.replace(/[^0-9]/g, '');
+        if (inp.value.length === 3 && i < 2) inputs[i+1].focus();
+      });
+      inp.addEventListener('keydown', function(e) {
+        if (e.key === 'Backspace' && inp.value === '' && i > 0) inputs[i-1].focus();
+        if (e.key === 'Enter') go();
+      });
+      inp.addEventListener('paste', function(e) {
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
+        if (text.length >= 9) {
+          inputs[0].value = text.slice(0, 3);
+          inputs[1].value = text.slice(3, 6);
+          inputs[2].value = text.slice(6, 9);
+          inputs[2].focus();
+        }
+      });
+    });
+    inputs[0].focus();
+    function go() {
+      var code = inputs[0].value + inputs[1].value + inputs[2].value;
+      if (code.length === 9) location.href = '/sncro/enable/' + code;
+    }
+  </script>
+</body></html>"""
+    return HTMLResponse(content=html)
+
+
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
 async def sncro_enable(key: str, request: Request):
     """Enable sncro with a key from Claude's create_session tool."""
+    key = _normalize_key(key)
     relay_url = getattr(request.app, '_sncro_relay_url', 'https://relay.sncro.net')
     try:
         req = urllib.request.Request(f"{relay_url}/session/{key}/consume", method="POST", data=b"")
@@ -145,6 +213,7 @@ async def sncro_enable(key: str, request: Request):
 @sncro_routes.get("/enable/{key}/qrcode", response_class=HTMLResponse)
 async def sncro_qrcode(key: str, request: Request):
     """Show a QR code for the enable URL — each key is single-use per device."""
+    key = _normalize_key(key)
     base = str(request.base_url).rstrip("/")
     enable_url = f"{base}/sncro/enable/{key}"
     html = """<!DOCTYPE html>

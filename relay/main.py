@@ -250,7 +250,13 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
             import traceback
             traceback.print_exc()
 
-    session_key = secrets.token_hex(16)  # 32 hex chars
+    # Generate a short, typeable session key: 9 digits formatted as 3-3-3
+    # Single-use + 30min expiry makes 1B combinations more than enough
+    digits = ''.join(secrets.choice('0123456789') for _ in range(9))
+    # Ensure no collision with active sessions (extremely unlikely but safe)
+    while store.has_session(digits):
+        digits = ''.join(secrets.choice('0123456789') for _ in range(9))
+    session_key = digits
     session_secret = secrets.token_hex(16)  # 32 hex chars — only Claude knows this
 
     # Log session to database
@@ -271,20 +277,31 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
 
     # Build the full enable URL — resolve the actual canonical domain
     raw_domain = project["domain"] if sb and project else None
+    # Display-friendly: 787-221-713
+    display_code = f"{session_key[0:3]}-{session_key[3:6]}-{session_key[6:9]}"
+
     if raw_domain:
         canonical = _resolve_domain(raw_domain)
-        enable_url = f"{canonical}/sncro/enable/{session_key}"
+        enable_url = f"{canonical}/sncro/enable/{display_code}"
+        enable_short = f"{canonical}/sncro/enable"
     else:
-        enable_url = f"<app_domain>/sncro/enable/{session_key}"
+        enable_url = f"<app_domain>/sncro/enable/{display_code}"
+        enable_short = f"<app_domain>/sncro/enable"
 
     qr_url = f"{enable_url}/qrcode" if enable_url and "<app_domain>" not in enable_url else None
 
     guide = f"""SESSION CREATED SUCCESSFULLY — here's everything you need:
 
-SETUP:
-  1. Tell the user to paste this URL in their browser: {enable_url}
-  2. Use check_session to confirm they're connected (status: "connected")
-  3. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
+SETUP — pick whichever is easier for the user:
+  Option A: Click/paste this URL in their browser: {enable_url}
+  Option B: On the target machine, open {enable_short} and type the code: {display_code}
+  Option C (mobile): Scan the QR code (see below)
+
+Then:
+  1. Use check_session to confirm they're connected (status: "connected")
+  2. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
+
+The 9-digit code is great for debugging a different machine — read it aloud or type it in. Easier than copying a long URL across machines.
 
 IMPORTANT: Each session key is single-use — one key, one browser/device. Once a key is consumed, it cannot be reused.
 NOTE: The app must be running in debug mode for sncro to work (e.g. FastAPI: app.debug=True, Flask: FLASK_DEBUG=1). If the enable URL shows "Debug mode is off", tell the user to enable debug mode and redeploy.
@@ -316,7 +333,9 @@ TIPS:
     return {
         "session_key": session_key,
         "session_secret": session_secret,
+        "display_code": display_code,
         "enable_url": enable_url,
+        "enable_short_url": enable_short,
         "qr_url": qr_url,
         "instructions": guide,
     }

@@ -22,13 +22,74 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 
     relay = relay_url.rstrip("/")
 
+    def _normalize_key(k):
+        return k.replace("-", "").replace(" ", "").strip()
+
     @app.route("/sncro/healthcheck")
     def sncro_healthcheck():
         """Used by the relay to discover the canonical domain for this app."""
         return {"ok": True}
 
+    @app.route("/sncro/enable")
+    def sncro_enable_prompt():
+        """Show a code-entry form when no key is in the URL."""
+        return """<!DOCTYPE html>
+<html><head><title>sncro — enter code</title>
+<style>
+  body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; padding: 0 20px; }
+  h2 { margin-bottom: 8px; }
+  .hint { color: #666; margin-bottom: 30px; line-height: 1.6; }
+  .code-input { display: flex; gap: 12px; justify-content: center; margin: 30px 0; }
+  .code-input input {
+    width: 70px; height: 70px; font-size: 2em; text-align: center;
+    border: 2px solid #ddd; border-radius: 12px; font-family: monospace;
+  }
+  .code-input input:focus { border-color: #2563eb; outline: none; }
+  .btn { padding: 12px 24px; font-size: 1em; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; }
+  .btn:hover { background: #1d4ed8; }
+</style></head>
+<body>
+  <h2>sncro</h2>
+  <p class="hint">Enter the 9-digit code from Claude</p>
+  <div class="code-input">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c1">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c2">
+    <input type="text" inputmode="numeric" maxlength="3" pattern="[0-9]*" id="c3">
+  </div>
+  <button class="btn" onclick="go()">Connect</button>
+  <script>
+    var inputs = [document.getElementById('c1'), document.getElementById('c2'), document.getElementById('c3')];
+    inputs.forEach(function(inp, i) {
+      inp.addEventListener('input', function() {
+        inp.value = inp.value.replace(/[^0-9]/g, '');
+        if (inp.value.length === 3 && i < 2) inputs[i+1].focus();
+      });
+      inp.addEventListener('keydown', function(e) {
+        if (e.key === 'Backspace' && inp.value === '' && i > 0) inputs[i-1].focus();
+        if (e.key === 'Enter') go();
+      });
+      inp.addEventListener('paste', function(e) {
+        e.preventDefault();
+        var text = (e.clipboardData || window.clipboardData).getData('text').replace(/[^0-9]/g, '');
+        if (text.length >= 9) {
+          inputs[0].value = text.slice(0, 3);
+          inputs[1].value = text.slice(3, 6);
+          inputs[2].value = text.slice(6, 9);
+          inputs[2].focus();
+        }
+      });
+    });
+    inputs[0].focus();
+    function go() {
+      var code = inputs[0].value + inputs[1].value + inputs[2].value;
+      if (code.length === 9) location.href = '/sncro/enable/' + code;
+    }
+  </script>
+</body></html>"""
+
     @app.route("/sncro/enable/<key>")
     def sncro_enable(key):
+        key = _normalize_key(key)
         # Try to consume the key (single-use)
         try:
             req = urllib.request.Request(f"{relay}/session/{key}/consume", method="POST", data=b"")
@@ -94,6 +155,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 
     @app.route("/sncro/enable/<key>/qrcode")
     def sncro_qrcode(key):
+        key = _normalize_key(key)
         enable_url = f"{request.host_url.rstrip('/')}/sncro/enable/{key}"
         html = """<!DOCTYPE html>
 <html><head><title>sncro — scan to enable</title>
