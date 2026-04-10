@@ -92,12 +92,19 @@
       </div>
 
       <div id="setup-claude" class="setup-panel active">
-        <p>Run this in your terminal:</p>
+        <p>Add <code>.mcp.json</code> to your project root:</p>
         <div class="copy-block">
-          <pre id="mcp-claude">claude mcp add --transport http sncro https://relay.sncro.net/tools/mcp</pre>
+          <pre id="mcp-claude">{
+  "mcpServers": {
+    "sncro": {
+      "type": "http",
+      "url": "https://relay.sncro.net/tools/mcp"
+    }
+  }
+}</pre>
           <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('mcp-claude').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
         </div>
-        <p class="hint">Then reload: Ctrl+Shift+P &rarr; "Developer: Reload Window"</p>
+        <p class="hint">Claude Code will prompt to approve the server on first use. No per-machine setup needed.</p>
       </div>
 
       <div id="setup-copilot" class="setup-panel">
@@ -145,7 +152,13 @@ URL: https://relay.sncro.net/tools/mcp</pre>
       <h3>Step 2: Tell your AI to debug this page</h3>
       <p>Paste this into your conversation:</p>
       <div class="copy-block">
-        <pre id="try-instructions">I'm debugging a web app at try.sncro.net. The scrolling is broken and a button doesn't work. Please use the sncro MCP tools to inspect my browser — the project key is b7a20c0797d72596. Don't try to find or edit source files, just diagnose the bugs.</pre>
+        <pre id="try-instructions">I'm debugging a web app at try.sncro.net using sncro, a browser debugging tool that lets you inspect my live browser (DOM, console, network) via MCP tools. The scrolling is broken and a button doesn't work.
+
+If sncro MCP tools are available (/mcp shows sncro): call create_session with project_key b7a20c0797d72596, give me the enable URL to click, call check_session to confirm connection, then use get_page_snapshot, get_console_logs, query_element, and get_network_log to diagnose the bugs. Don't try to find or edit source files, just diagnose.
+
+If sncro MCP tools are NOT available: add a .mcp.json file to the project root:
+{ "mcpServers": { "sncro": { "type": "http", "url": "https://relay.sncro.net/tools/mcp" } } }
+Then reload the editor and verify with /mcp.</pre>
         <button class="btn copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('try-instructions').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
       </div>
       <p class="hint">No account needed. Your AI connects directly via MCP.</p>
