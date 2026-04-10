@@ -298,7 +298,9 @@ SETUP — pick whichever is easier for the user:
   Option C (mobile): Scan the QR code (see below)
 
 Then:
-  1. Use check_session to confirm they're connected (status: "connected")
+  1. IMPORTANT: Call check_session to confirm the browser is connected (status: "connected")
+     before using any other tools. If status is "waiting", the user hasn't enabled yet —
+     remind them, wait a few seconds, and call check_session again.
   2. Pass the session_key as "key" and session_secret as "secret" to every subsequent tool call
 
 The 9-digit code is great for debugging a different machine — read it aloud or type it in. Easier than copying a long URL across machines.
@@ -384,14 +386,48 @@ def _mark_session_connected(key: str) -> None:
         pass
 
 
-async def _send_browser_request(key: str, secret: str, tool: str, params: dict | None = None) -> dict:
-    """Post a request to the store and wait for the browser's response."""
+async def _send_browser_request(key: str, secret: str, tool: str, params: dict | None = None, _retry: int = 0) -> dict:
+    """Post a request to the store and wait for the browser's response.
+
+    If the browser isn't connected yet, waits up to CONNECT_WAIT seconds for
+    it to appear, then retries once automatically if it connects mid-wait.
+    """
+    MAX_RETRIES = 1
+    CONNECT_WAIT = 15  # seconds to wait for browser to connect before giving up
+
     err = _check_secret(key, secret)
     if err:
         return err
     store.ensure_session(key)
     store.record_tool(key, tool)
     _update_session_activity(key)
+
+    # If browser hasn't connected yet, wait for it rather than posting a
+    # request that nobody will pick up (which wastes the full 30s timeout).
+    if not store.is_connected(key):
+        connect_deadline = time.time() + CONNECT_WAIT
+        while time.time() < connect_deadline:
+            if store.is_connected(key):
+                break
+            await asyncio.sleep(0.5)
+        if not store.is_connected(key):
+            session = store.get_session_info(key)
+            age = int(time.time() - session["created_at"]) if session else 0
+            return {
+                "error": "BROWSER_NOT_CONNECTED",
+                "message": (
+                    f"The browser has not connected to this sncro session yet "
+                    f"(session created {age}s ago). "
+                    "The user needs to open the enable URL in their browser first. "
+                    "Common causes:\n"
+                    "  1. User hasn't clicked/pasted the enable URL yet — remind them\n"
+                    "  2. The app is not running in debug mode (sncro only loads when debug=True)\n"
+                    "  3. The middleware isn't installed or the app hasn't been restarted\n"
+                    "  4. The browser page hasn't finished loading yet — wait a few seconds and retry\n\n"
+                    "ACTION: Call check_session to monitor the connection, then retry this tool once the status is 'connected'."
+                ),
+            }
+
     request_id = uuid.uuid4().hex[:12]
     store.add_request(key, {
         "request_id": request_id,
@@ -406,7 +442,24 @@ async def _send_browser_request(key: str, secret: str, tool: str, params: dict |
         if resp is not None:
             return resp
         await asyncio.sleep(0.5)
-    return {"error": "Browser did not respond in time. Is the page open with sncro enabled?"}
+
+    # Timed out — retry once automatically (browser may have been briefly unresponsive)
+    if _retry < MAX_RETRIES:
+        return await _send_browser_request(key, secret, tool, params, _retry=_retry + 1)
+
+    return {
+        "error": "BROWSER_TIMEOUT",
+        "message": (
+            f"The browser is connected but did not respond to '{tool}' within {LONG_POLL_TIMEOUT}s "
+            f"(tried {_retry + 1} time(s)). "
+            "Possible causes:\n"
+            "  1. The browser tab may be in the background (browsers throttle background tabs)\n"
+            "  2. The page may be navigating or reloading — wait a moment and retry\n"
+            "  3. A heavy script may be blocking the main thread\n"
+            "  4. The user may have closed or navigated away from the page\n\n"
+            "ACTION: Ask the user to confirm the page is still open and in the foreground, then retry."
+        ),
+    }
 
 
 @mcp.tool()
@@ -415,6 +468,11 @@ async def get_console_logs(key: str, secret: str) -> dict:
 
     Returns the latest console output and any JavaScript errors,
     including unhandled exceptions and promise rejections.
+
+    This reads from baseline data that the browser pushes every 5 seconds,
+    so it works even if the browser tab is in the background. If you get a
+    "no data" error, the browser hasn't connected yet — call check_session
+    to diagnose, then retry.
     """
     err = _check_secret(key, secret)
     if err:
@@ -424,7 +482,18 @@ async def get_console_logs(key: str, secret: str) -> dict:
     _update_session_activity(key)
     snapshot = store.get_snapshot(key)
     if snapshot is None:
-        return {"error": "No data yet. Is the browser page open with sncro enabled?"}
+        info = store.get_session_info(key)
+        age = int(time.time() - info["created_at"]) if info else 0
+        return {
+            "error": "BROWSER_NOT_CONNECTED",
+            "message": (
+                f"No console data available — the browser has not connected to this session yet "
+                f"(session created {age}s ago). "
+                "The user needs to open the enable URL in their browser first.\n\n"
+                "ACTION: Call check_session to monitor the connection status, "
+                "remind the user to click the enable URL, then retry get_console_logs once connected."
+            ),
+        }
     return snapshot
 
 
@@ -435,6 +504,10 @@ async def query_element(key: str, secret: str, selector: str, styles: list[str] 
     Returns bounding rect, attributes, computed styles, inner text,
     and child count. Use this to debug layout, positioning, and
     visibility issues.
+
+    Requires a connected browser session. If you get BROWSER_NOT_CONNECTED,
+    call check_session first and wait for "connected" status. If you get
+    BROWSER_TIMEOUT, the page may be navigating — wait a moment and retry.
 
     Args:
         key: The sncro session key
@@ -455,6 +528,9 @@ async def query_all(key: str, secret: str, selector: str, limit: int = 20) -> di
     Returns a summary of each matching element (tag, id, class,
     bounding rect, inner text). Useful for checking lists, grids,
     or multiple instances of a component.
+
+    Requires a connected browser session. If you get BROWSER_NOT_CONNECTED,
+    call check_session first and wait for "connected" status.
 
     Args:
         key: The sncro session key
@@ -478,6 +554,9 @@ async def get_network_log(key: str, secret: str, limit: int = 50, type: str | No
     Use this to find slow API calls, large assets, or overall page
     load performance.
 
+    Requires a connected browser session. If you get BROWSER_NOT_CONNECTED,
+    call check_session first and wait for "connected" status.
+
     Args:
         key: The sncro session key
         secret: The session secret from create_session
@@ -499,29 +578,66 @@ async def get_page_snapshot(key: str, secret: str) -> dict:
 
     Returns URL, title, viewport dimensions, scroll position,
     top-level DOM structure, recent console logs, and recent errors.
+
+    Requires a connected browser session. If you get BROWSER_NOT_CONNECTED,
+    call check_session first and wait for "connected" status.
     """
     return await _send_browser_request(key, secret, "get_page_snapshot", {})
 
 
 @mcp.tool()
 async def check_session(key: str, secret: str) -> dict:
-    """Check the status of a sncro session.
+    """Check the connection status of a sncro session.
+
+    Call this after create_session to confirm the browser has connected
+    before using other tools. If status is "waiting", the user hasn't
+    enabled sncro yet — remind them to click/paste the enable URL,
+    wait a few seconds, and call check_session again.
 
     Returns:
         status: "not_found" | "waiting" | "connected"
-        - not_found: session key doesn't exist
-        - waiting: session created but browser hasn't connected yet
-        - connected: browser is actively sending data
+        session_age_seconds: how long since the session was created
+        next_step: what to do based on current status
     """
     err = _check_secret(key, secret)
     if err:
         return err
     if not store.has_session(key):
-        return {"active": False, "status": "not_found"}
+        return {
+            "active": False,
+            "status": "not_found",
+            "message": (
+                "This session key does not exist. It may have expired (sessions last 30 minutes) "
+                "or it was never created. Call create_session to start a new session."
+            ),
+        }
+    info = store.get_session_info(key)
+    age = int(time.time() - info["created_at"]) if info else 0
     snapshot = store.get_snapshot(key)
     if snapshot is None:
-        return {"active": True, "status": "waiting"}
-    return {"active": True, "status": "connected"}
+        return {
+            "active": True,
+            "status": "waiting",
+            "session_age_seconds": age,
+            "consumed": info.get("consumed", False) if info else False,
+            "message": (
+                f"Session created {age}s ago but the browser has NOT connected yet. "
+                "The user needs to open the enable URL in their browser. "
+                "Remind them to click/paste it. If they already did:\n"
+                "  - Make sure the app is running in debug mode (sncro only loads when debug=True)\n"
+                "  - Make sure the page has finished loading\n"
+                "  - Try refreshing the page\n\n"
+                "Call check_session again in a few seconds to see if they've connected."
+            ),
+        }
+    return {
+        "active": True,
+        "status": "connected",
+        "session_age_seconds": age,
+        "message": "Browser is connected and sending data. You can now use all sncro tools.",
+        "snapshot_url": snapshot.get("url", ""),
+        "snapshot_title": snapshot.get("title", ""),
+    }
 
 
 @mcp.tool()

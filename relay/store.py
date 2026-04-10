@@ -62,6 +62,21 @@ class SessionStore:
     def is_consumed(self, key: str) -> bool:
         return self._sessions.get(key, {}).get("consumed", False)
 
+    def is_connected(self, key: str) -> bool:
+        """Check if the browser has sent at least one snapshot."""
+        return self._sessions.get(key, {}).get("connected", False)
+
+    def get_session_info(self, key: str) -> dict | None:
+        """Return basic session metadata (created_at, connected, consumed)."""
+        s = self._sessions.get(key)
+        if not s:
+            return None
+        return {
+            "created_at": s["created_at"],
+            "connected": s["connected"],
+            "consumed": s["consumed"],
+        }
+
     def verify_secret(self, key: str, secret: str) -> bool:
         """Check if the secret matches. Returns True if no secret was set (legacy)."""
         if key not in self._sessions:
