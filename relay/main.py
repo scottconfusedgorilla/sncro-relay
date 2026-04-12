@@ -306,7 +306,7 @@ Then:
 The 9-digit code is great for debugging a different machine — read it aloud or type it in. Easier than copying a long URL across machines.
 
 IMPORTANT: Each session key is single-use — one key, one browser/device. Once a key is consumed, it cannot be reused.
-NOTE: The app must be running in debug mode for sncro to work (e.g. FastAPI: app.debug=True, Flask: FLASK_DEBUG=1). If the enable URL shows "Debug mode is off", tell the user to enable debug mode and redeploy.
+NOTE: The app must be running with DEBUG=true for sncro to work (e.g. DEBUG=true uvicorn app:app, or FLASK_DEBUG=1 flask run). If the enable URL shows "Debug mode is off", tell the user to set the DEBUG env var and restart.
 {f"""MOBILE / PWA / TABLET:
   If the user is on a phone, tablet, or PWA (no address bar), do NOT ask them to paste a URL.
   Instead: call create_session again to get a SEPARATE key for the mobile device, then tell the
@@ -421,7 +421,7 @@ async def _send_browser_request(key: str, secret: str, tool: str, params: dict |
                     "The user needs to open the enable URL in their browser first. "
                     "Common causes:\n"
                     "  1. User hasn't clicked/pasted the enable URL yet — remind them\n"
-                    "  2. The app is not running in debug mode (sncro only loads when debug=True)\n"
+                    "  2. The app is not running with DEBUG=true (sncro only loads in debug mode)\n"
                     "  3. The middleware isn't installed or the app hasn't been restarted\n"
                     "  4. The browser page hasn't finished loading yet — wait a few seconds and retry\n\n"
                     "ACTION: Call check_session to monitor the connection, then retry this tool once the status is 'connected'."
@@ -624,7 +624,7 @@ async def check_session(key: str, secret: str) -> dict:
                 f"Session created {age}s ago but the browser has NOT connected yet. "
                 "The user needs to open the enable URL in their browser. "
                 "Remind them to click/paste it. If they already did:\n"
-                "  - Make sure the app is running in debug mode (sncro only loads when debug=True)\n"
+                "  - Make sure the app is running with DEBUG=true (sncro only loads in debug mode)\n"
                 "  - Make sure the page has finished loading\n"
                 "  - Try refreshing the page\n\n"
                 "Call check_session again in a few seconds to see if they've connected."
