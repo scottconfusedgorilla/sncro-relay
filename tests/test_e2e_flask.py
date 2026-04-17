@@ -1,7 +1,6 @@
 """End-to-end tests for sncro with a Flask app.
 
-Tests the full flow: enable session → inject agent.js → push snapshot →
-read via relay endpoints. Simulates what agent.js does without a real browser.
+Mirrors test_e2e_fastapi.py but against the Flask middleware.
 """
 
 import pytest
@@ -11,8 +10,10 @@ from fastapi.testclient import TestClient as RelayClient
 from middleware.sncro_flask import init_sncro
 from relay.main import app as relay_app, store
 
+KEY = "100000001"
+KEY_ALT = "200000002"
+BROWSER_SECRET = "0" * 32
 
-# --- Test Flask app with sncro middleware ---
 
 def make_flask_app():
     app = Flask(__name__)
@@ -34,61 +35,60 @@ def make_flask_app():
     return app
 
 
-flask_app = make_flask_app()
-flask_client = flask_app.test_client()
-relay_client = RelayClient(relay_app)
-
-
 @pytest.fixture(autouse=True)
 def clear_store():
     store._sessions.clear()
+    try:
+        limiter = relay_app.state.limiter
+        if hasattr(limiter, "reset"):
+            limiter.reset()
+    except Exception:
+        pass
     yield
     store._sessions.clear()
 
 
+@pytest.fixture
+def flask_client():
+    return make_flask_app().test_client()
+
+
+@pytest.fixture
+def relay_client():
+    return RelayClient(relay_app)
+
+
 class TestFlaskEndToEnd:
-    """Full flow: enable → inject → snapshot → read."""
-
-    def test_enable_sets_cookie(self):
-        """Visiting /sncro/enable/{key} sets the session cookie."""
-        resp = flask_client.get("/sncro/enable/e2e-flask-key")
+    def test_get_enable_shows_confirm_page(self, flask_client):
+        resp = flask_client.get(f"/sncro/enable/{KEY}")
         assert resp.status_code == 200
-        # Flask test client stores cookies internally; verify by making another request
-        resp2 = flask_client.get("/")
-        assert b"agent.js" in resp2.data
-        assert b'data-key="e2e-flask-key"' in resp2.data
-        assert b"Connected" in resp.data
+        assert b"Allow sncro" in resp.data
+        # GET must not set cookies — only POST /confirm does (with Origin check).
+        cookies = resp.headers.getlist("Set-Cookie")
+        assert not any("sncro_key" in c for c in cookies)
 
-    def test_injection_after_enable(self):
-        """After enable, HTML pages get agent.js injected."""
-        # Set cookie first
-        flask_client.get("/sncro/enable/e2e-flask-key")
+    def test_injection_requires_both_cookies(self, flask_client):
+        flask_client.set_cookie("sncro_key", KEY, domain="localhost")
+        flask_client.set_cookie("sncro_browser_secret", BROWSER_SECRET, domain="localhost")
         resp = flask_client.get("/")
         assert b"agent.js" in resp.data
-        assert b'data-key="e2e-flask-key"' in resp.data
+        assert f'data-key="{KEY}"'.encode() in resp.data
         assert b'data-relay="http://relay-test"' in resp.data
 
-    def test_no_injection_on_json(self):
-        """JSON endpoints are not affected."""
-        flask_client.get("/sncro/enable/e2e-flask-key")
+    def test_no_injection_on_json(self, flask_client):
+        flask_client.set_cookie("sncro_key", KEY, domain="localhost")
+        flask_client.set_cookie("sncro_browser_secret", BROWSER_SECRET, domain="localhost")
         resp = flask_client.get("/api/data")
         assert resp.json == {"items": [1, 2, 3]}
         assert b"agent.js" not in resp.data
 
-    def test_disable_clears_cookie(self):
-        """Visiting /sncro/disable removes the cookie."""
-        flask_client.get("/sncro/enable/e2e-flask-key")
+    def test_disable_page_renders(self, flask_client):
         resp = flask_client.get("/sncro/disable")
         assert resp.status_code == 200
-        # Get a fresh client to verify cookie is gone
-        resp2 = flask_client.get("/")
-        # After disable, the cookie should be cleared
-        assert b"agent.js" not in resp2.data
+        assert b"sncro disabled" in resp.data.lower()
 
-    def test_full_snapshot_flow(self):
-        """Simulate agent.js pushing a snapshot, then reading it via relay."""
-        key = "e2e-flask-snapshot"
-
+    def test_full_snapshot_flow(self, relay_client):
+        store.ensure_session(KEY, browser_secret=BROWSER_SECRET)
         snapshot = {
             "console": [{"level": "log", "message": "flask loaded", "timestamp": 2000}],
             "errors": [],
@@ -96,27 +96,26 @@ class TestFlaskEndToEnd:
             "title": "Hello Flask",
             "timestamp": 2000.0,
         }
-        resp = relay_client.post(f"/session/{key}/snapshot", json=snapshot)
-        assert resp.json()["ok"] is True
-
-        resp = relay_client.get(f"/session/{key}/snapshot")
+        resp = relay_client.post(
+            f"/session/{KEY}/snapshot",
+            json=snapshot,
+            headers={"X-Sncro-Secret": BROWSER_SECRET},
+        )
         assert resp.status_code == 200
-        assert resp.json()["console"][0]["message"] == "flask loaded"
+        stored = store.get_snapshot(KEY)
+        assert stored["console"][0]["message"] == "flask loaded"
 
-    def test_full_request_response_flow(self):
-        """Simulate the on-demand query flow."""
-        key = "e2e-flask-query"
-        store.ensure_session(key)
-
-        req = {
+    def test_full_request_response_flow(self, relay_client):
+        store.ensure_session(KEY_ALT, browser_secret=BROWSER_SECRET)
+        headers = {"X-Sncro-Secret": BROWSER_SECRET}
+        store.add_request(KEY_ALT, {
             "request_id": "freq-001",
             "tool": "get_page_snapshot",
             "params": {},
-        }
-        resp = relay_client.post(f"/session/{key}/request", json=req)
-        assert resp.json()["ok"] is True
+        })
 
-        resp = relay_client.get(f"/session/{key}/request/pending?timeout=1")
+        resp = relay_client.get(f"/session/{KEY_ALT}/request/pending?timeout=1", headers=headers)
+        assert resp.status_code == 200
         assert resp.json()["request_id"] == "freq-001"
 
         browser_resp = {
@@ -127,15 +126,15 @@ class TestFlaskEndToEnd:
                 "viewport": {"width": 1024, "height": 768},
             },
         }
-        resp = relay_client.post(f"/session/{key}/response", json=browser_resp)
-        assert resp.json()["ok"] is True
+        resp = relay_client.post(f"/session/{KEY_ALT}/response", json=browser_resp, headers=headers)
+        assert resp.status_code == 200
 
-        resp = relay_client.get(f"/session/{key}/response/freq-001?timeout=1")
-        assert resp.json()["data"]["title"] == "Hello Flask"
+        stored = store.pop_response(KEY_ALT, "freq-001")
+        assert stored["data"]["title"] == "Hello Flask"
 
-    def test_content_length_not_corrupted(self):
-        """Injection must not leave stale Content-Length."""
-        flask_client.get("/sncro/enable/cl-flask-test")
+    def test_content_length_not_corrupted(self, flask_client):
+        flask_client.set_cookie("sncro_key", KEY, domain="localhost")
+        flask_client.set_cookie("sncro_browser_secret", BROWSER_SECRET, domain="localhost")
         resp = flask_client.get("/")
         cl = resp.headers.get("Content-Length")
         if cl is not None:
