@@ -28,10 +28,20 @@ from relay.store import SessionStore
 
 def _client_ip(request: Request) -> str:
     """Rate-limit key: real client IP from X-Forwarded-For (Railway is behind a
-    proxy, so request.client.host is the proxy's IP). Falls back to the default."""
+    proxy, so request.client.host is the proxy's IP). Falls back to the default.
+
+    Uses the RIGHTMOST entry — Railway's Envoy appends the TCP source to
+    X-Forwarded-For rather than replacing it, so the leftmost value is
+    attacker-controlled (a client can send X-Forwarded-For: 1.2.3.4 and the
+    real IP is appended after). Taking [-1] ensures the value is the one
+    Railway itself recorded. Requires exactly one trusted proxy hop — if a
+    second reverse proxy (e.g. Cloudflare) is added later, switch to its
+    dedicated header (CF-Connecting-IP) or take [-2]. See NEW-4 in the
+    blackhat/2 Phase 1c review.
+    """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return get_remote_address(request)
 
 
