@@ -34,7 +34,7 @@ def _key_is_valid(k):
 
 def _error_page(title, status, hint):
     return f"""<!DOCTYPE html>
-<html><head><title>sncro — {_html.escape(title)}</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — {_html.escape(title)}</title>
 <style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
 .status {{ font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }}
 .hint {{ color: #666; margin-top: 10px; line-height: 1.6; }}</style></head>
@@ -58,7 +58,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     def sncro_enable_prompt():
         """Show a code-entry form when no key is in the URL."""
         return """<!DOCTYPE html>
-<html><head><title>sncro — enter code</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — enter code</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; padding: 0 20px; }
   h2 { margin-bottom: 8px; }
@@ -131,9 +131,10 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         host = _html.escape(request.host or "this site", quote=True)
         safe_key = _html.escape(key, quote=True)
         return f"""<!DOCTYPE html>
-<html><head><title>sncro — allow access?</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — allow access?</title>
 <style>
-  body {{ font-family: system-ui; max-width: 540px; margin: 60px auto; padding: 0 20px; }}
+  body {{ font-family: system-ui; max-width: 540px; margin: 24px auto; padding: 0 20px; font-size: 16px; }}
+  @media (min-width: 600px) {{ body {{ margin: 60px auto; }} }}
   h2 {{ text-align: center; margin-bottom: 8px; }}
   .lead {{ text-align: center; color: #444; margin-bottom: 24px; }}
   .panel {{ background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 20px 0; }}
@@ -201,7 +202,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
                                "The relay did not return a valid browser secret.")
 
         body = """<!DOCTYPE html>
-<html><head><title>sncro enabled</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro enabled</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
   .status { font-size: 1.4em; color: #16a34a; margin: 30px 0 10px; }
@@ -245,7 +246,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
                                "Codes are 9 digits.<br>Ask Claude for a new code.")
         enable_url = f"{request.host_url.rstrip('/')}/sncro/enable/{key}"
         body = """<!DOCTYPE html>
-<html><head><title>sncro — scan to enable</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — scan to enable</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 60px auto; text-align: center;
          background: #0a0e1a; color: #e0e0e0; }
@@ -300,7 +301,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     @app.route("/sncro/disable")
     def sncro_disable():
         body = """<!DOCTYPE html>
-<html><head><title>sncro disabled</title>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro disabled</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
 </style></head>
