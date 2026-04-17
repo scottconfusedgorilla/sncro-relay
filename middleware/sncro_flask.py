@@ -23,6 +23,23 @@ SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
 KEY_RE = re.compile(r"^\d{9}$")
 SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# Prevent clickjacking on every sncro-served page. DENY stops framing in
+# all browsers (including old ones that ignore CSP); frame-ancestors 'none'
+# is the modern equivalent.
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _secure_html(body, status=200):
+    """Flask response with clickjacking + referrer-leak defences pre-applied."""
+    resp = make_response(body, status)
+    for name, value in SECURITY_HEADERS.items():
+        resp.headers[name] = value
+    return resp
+
 
 def _normalize_key(k):
     return k.replace("-", "").replace(" ", "").strip()
@@ -32,8 +49,25 @@ def _key_is_valid(k):
     return bool(KEY_RE.fullmatch(k))
 
 
+def _request_is_same_origin():
+    """CSRF defence for state-changing POSTs.
+
+    Sec-Fetch-Site is the reliable modern signal; all evergreen browsers
+    send it. Origin is a fallback (sent on POSTs by all major browsers).
+    Rejecting when neither is present is safer than allowing.
+    """
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site", "")
+    if sec_fetch_site:
+        return sec_fetch_site in ("same-origin", "none")
+    origin = request.headers.get("Origin", "")
+    if origin:
+        expected = f"{request.scheme}://{request.host}"
+        return origin == expected
+    return False
+
+
 def _error_page(title, status, hint):
-    return f"""<!DOCTYPE html>
+    return _secure_html(f"""<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — {_html.escape(title)}</title>
 <style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
 .status {{ font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }}
@@ -41,7 +75,7 @@ def _error_page(title, status, hint):
 <body><h2>sncro</h2>
 <p class="status">{_html.escape(status)}</p>
 <p class="hint">{hint}</p>
-</body></html>"""
+</body></html>""")
 
 
 def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
@@ -57,7 +91,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     @app.route("/sncro/enable")
     def sncro_enable_prompt():
         """Show a code-entry form when no key is in the URL."""
-        return """<!DOCTYPE html>
+        return _secure_html("""<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — enter code</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; padding: 0 20px; }
@@ -109,7 +143,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
       if (code.length === 9) location.href = '/sncro/enable/' + code;
     }
   </script>
-</body></html>"""
+</body></html>""")
 
     @app.route("/sncro/enable/<key>")
     def sncro_enable_confirm_page(key):
@@ -130,7 +164,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         display = f"{key[0:3]}-{key[3:6]}-{key[6:9]}"
         host = _html.escape(request.host or "this site", quote=True)
         safe_key = _html.escape(key, quote=True)
-        return f"""<!DOCTYPE html>
+        return _secure_html(f"""<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — allow access?</title>
 <style>
   body {{ font-family: system-ui; max-width: 540px; margin: 24px auto; padding: 0 20px; font-size: 16px; }}
@@ -168,11 +202,21 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   </form>
 
   <p class="meta">If you didn't expect this, just close the tab. Nothing is enabled until you click Allow.</p>
-</body></html>"""
+</body></html>""")
 
     @app.route("/sncro/enable/<key>/confirm", methods=["POST"])
     def sncro_enable(key):
-        """Actually enable sncro after the user clicked Allow on the confirm page."""
+        """Actually enable sncro after the user clicked Allow on the confirm page.
+
+        CSRF defence: without the Origin / Sec-Fetch-Site check below, a hidden
+        auto-submitting form on evil.com can POST here cross-site; SameSite=Strict
+        on the resulting cookies blocks them being *sent* cross-site but not *set*,
+        so the victim ends up with a live sncro session seeded by the attacker.
+        """
+        if not _request_is_same_origin():
+            return _error_page("cross-site POST blocked", "Cross-site request blocked",
+                               "If you meant to enable sncro, open the URL directly in this browser.")
+
         key = _normalize_key(key)
         if not _key_is_valid(key):
             return _error_page("invalid key", "Invalid session code",
@@ -232,7 +276,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     }, 1000);
   </script>
 </body></html>"""
-        resp = make_response(body)
+        resp = _secure_html(body)
         cookie_kwargs = dict(httponly=False, secure=True, samesite="Strict", max_age=1800, path="/")
         resp.set_cookie(SNCRO_KEY_COOKIE, key, **cookie_kwargs)
         resp.set_cookie(SNCRO_BROWSER_SECRET_COOKIE, browser_secret, **cookie_kwargs)
@@ -296,7 +340,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     }, 1000);
   </script>
 </body></html>""".replace("ENABLE_URL", enable_url)
-        return body
+        return _secure_html(body)
 
     @app.route("/sncro/disable")
     def sncro_disable():
@@ -309,7 +353,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   <h2>sncro disabled</h2>
   <p>The agent script will no longer be injected.</p>
 </body></html>"""
-        resp = make_response(body)
+        resp = _secure_html(body)
         resp.delete_cookie(SNCRO_KEY_COOKIE, path="/")
         resp.delete_cookie(SNCRO_BROWSER_SECRET_COOKIE, path="/")
         return resp

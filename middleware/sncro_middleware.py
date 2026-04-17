@@ -26,6 +26,21 @@ SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
 KEY_RE = re.compile(r"^\d{9}$")
 SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# Prevent clickjacking on every sncro-served page. DENY stops framing in
+# all browsers (including old ones that ignore CSP); frame-ancestors 'none'
+# is the modern equivalent.
+SECURITY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _secure_html(content: str, status_code: int = 200) -> HTMLResponse:
+    """HTMLResponse with clickjacking + referrer-leak defences pre-applied."""
+    return HTMLResponse(content=content, status_code=status_code,
+                        headers=dict(SECURITY_HEADERS))
+
 
 class SncroMiddleware(BaseHTTPMiddleware):
     """Injects the sncro agent script into HTML responses when enabled."""
@@ -96,7 +111,7 @@ def _key_is_valid(key: str) -> bool:
 
 
 def _error_page(title: str, status: str, hint: str) -> HTMLResponse:
-    return HTMLResponse(content=f"""<!DOCTYPE html>
+    return _secure_html(f"""<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — {html.escape(title)}</title>
 <style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
 .status {{ font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }}
@@ -105,6 +120,24 @@ def _error_page(title: str, status: str, hint: str) -> HTMLResponse:
 <p class="status">{html.escape(status)}</p>
 <p class="hint">{hint}</p>
 </body></html>""")
+
+
+def _request_is_same_origin(request: Request) -> bool:
+    """CSRF defence for state-changing POSTs.
+
+    Modern browsers send Sec-Fetch-Site on every request; trust it first.
+    Fall back to Origin (sent on POSTs by all major browsers). Rejecting
+    when neither is present is safer than allowing — real browsers always
+    send at least one.
+    """
+    sec_fetch_site = request.headers.get("sec-fetch-site", "")
+    if sec_fetch_site:
+        return sec_fetch_site in ("same-origin", "none")
+    origin = request.headers.get("origin", "")
+    if origin:
+        expected = f"{request.url.scheme}://{request.url.netloc}"
+        return origin == expected
+    return False
 
 
 @sncro_routes.get("/healthcheck")
@@ -172,7 +205,7 @@ async def sncro_enable_prompt():
     }
   </script>
 </body></html>"""
-    return HTMLResponse(content=html)
+    return _secure_html(html)
 
 
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
@@ -234,7 +267,7 @@ async def sncro_enable_confirm_page(key: str, request: Request):
 
   <p class="meta">If you didn't expect this, just close the tab. Nothing is enabled until you click Allow.</p>
 </body></html>"""
-    return HTMLResponse(content=confirm_html)
+    return _secure_html(confirm_html)
 
 
 @sncro_routes.post("/enable/{key}/confirm", response_class=HTMLResponse)
@@ -244,7 +277,16 @@ async def sncro_enable(key: str, request: Request):
     This is the only entry point that consumes the session and sets cookies.
     Reachable only via a POST form submission — i.e. a deliberate user action,
     not an attacker-supplied link.
+
+    CSRF defence: without the Origin / Sec-Fetch-Site check below, a hidden
+    auto-submitting form on evil.com can POST here cross-site; SameSite=Strict
+    on the resulting cookies blocks them being *sent* cross-site but not *set*,
+    so the victim ends up with a live sncro session seeded by the attacker.
     """
+    if not _request_is_same_origin(request):
+        return _error_page("cross-site POST blocked", "Cross-site request blocked",
+                           "If you meant to enable sncro, open the URL directly in this browser.")
+
     key = _normalize_key(key)
     if not _key_is_valid(key):
         return _error_page("invalid key", "Invalid session code",
@@ -306,7 +348,7 @@ async def sncro_enable(key: str, request: Request):
   </script>
 </body></html>"""
 
-    response = HTMLResponse(content=html_body)
+    response = HTMLResponse(content=html_body, headers=dict(SECURITY_HEADERS))
     # Cookies are non-httponly so agent.js can read them. Defence is via:
     #   - secure: HTTPS-only
     #   - samesite=strict: don't flow on cross-site requests (helps mitigate C-1)
@@ -378,7 +420,7 @@ async def sncro_qrcode(key: str, request: Request):
   </script>
 </body></html>""".replace("ENABLE_URL", enable_url)
 
-    return HTMLResponse(content=html)
+    return _secure_html(html)
 
 
 @sncro_routes.get("/disable", response_class=HTMLResponse)
@@ -394,7 +436,7 @@ async def sncro_disable():
   <p>The agent script will no longer be injected.</p>
 </body></html>"""
 
-    response = HTMLResponse(content=html)
+    response = HTMLResponse(content=html, headers=dict(SECURITY_HEADERS))
     response.delete_cookie(SNCRO_KEY_COOKIE, path="/")
     response.delete_cookie(SNCRO_BROWSER_SECRET_COOKIE, path="/")
     return response
