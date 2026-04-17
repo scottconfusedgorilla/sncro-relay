@@ -3,6 +3,7 @@
 import asyncio
 import ipaddress
 import os
+import re
 import secrets
 import socket
 import time
@@ -24,6 +25,12 @@ from slowapi.util import get_remote_address
 from mcp.server.transport_security import TransportSecuritySettings
 
 from relay.store import SessionStore
+
+# GitHub allows [A-Za-z0-9-] up to 39 chars; we're slightly more permissive
+# (underscore, 40 chars) to cover non-GitHub git configs. Anything else is
+# rejected at the MCP boundary so it can never reach the DB — blocks stored
+# XSS via attacker-supplied git_user (see NEW-5).
+_GIT_USER_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
 def _client_ip(request: Request) -> str:
@@ -264,6 +271,15 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
     to register their project and get a key. It takes 30 seconds — sign in with GitHub,
     click "+ Add project", enter the domain, and copy the project key into CLAUDE.md.
     """
+    # Validate git_user shape before it can reach the DB. Empty is allowed
+    # (guest-access handling treats that specially). Anything non-empty must
+    # match _GIT_USER_RE — GitHub-username shape only.
+    if git_user and not _GIT_USER_RE.fullmatch(git_user):
+        return {
+            "error": "INVALID_GIT_USER",
+            "message": "git_user must look like a GitHub username (letters, digits, dashes/underscores, 1-40 chars). Tell the user to re-run with a sane git username, or drop the parameter.",
+        }
+
     sb = _get_supabase()
 
     if sb:
@@ -761,6 +777,8 @@ async def report_issue(project_key: str, category: str, description: str, git_us
     valid_categories = {"bug", "feature_request", "usability", "documentation", "success_story"}
     if category not in valid_categories:
         return {"error": f"Category must be one of: {', '.join(sorted(valid_categories))}"}
+    if git_user and not _GIT_USER_RE.fullmatch(git_user):
+        return {"error": "git_user must look like a GitHub username (letters, digits, dashes/underscores, 1-40 chars)."}
 
     # Forward to web server for persistent storage
     import httpx
