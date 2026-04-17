@@ -13,11 +13,12 @@ class SessionStore:
         self.expiry_seconds = expiry_minutes * 60
         self._sessions: dict[str, dict] = {}
 
-    def _new_session(self, secret: str = "", db_id: str = "") -> dict:
+    def _new_session(self, secret: str = "", browser_secret: str = "", db_id: str = "") -> dict:
         return {
             "created_at": time.time(),
             "last_seen": time.time(),
             "secret": secret,
+            "browser_secret": browser_secret,
             "db_id": db_id,
             "snapshot": None,
             "connected": False,
@@ -27,10 +28,20 @@ class SessionStore:
             "responses": {},
         }
 
-    def ensure_session(self, key: str, secret: str = "", db_id: str = "") -> None:
+    def ensure_session(self, key: str, secret: str = "", browser_secret: str = "", db_id: str = "") -> None:
         if key not in self._sessions:
-            self._sessions[key] = self._new_session(secret=secret, db_id=db_id)
+            self._sessions[key] = self._new_session(secret=secret, browser_secret=browser_secret, db_id=db_id)
         self._sessions[key]["last_seen"] = time.time()
+
+    def touch(self, key: str) -> bool:
+        """Update last_seen without creating a new session. Returns False if key unknown."""
+        if key not in self._sessions:
+            return False
+        self._sessions[key]["last_seen"] = time.time()
+        return True
+
+    def get_browser_secret(self, key: str) -> str:
+        return self._sessions.get(key, {}).get("browser_secret", "")
 
     def get_db_id(self, key: str) -> str:
         return self._sessions.get(key, {}).get("db_id", "")
@@ -86,6 +97,15 @@ class SessionStore:
         if not stored or not secret:
             return False
         return secrets.compare_digest(stored, secret)
+
+    def verify_browser_secret(self, key: str, browser_secret: str) -> bool:
+        """Constant-time check of the browser-side secret (set at /enable)."""
+        if key not in self._sessions:
+            return False
+        stored = self._sessions[key].get("browser_secret", "")
+        if not stored or not browser_secret:
+            return False
+        return secrets.compare_digest(stored, browser_secret)
 
     def has_session(self, key: str) -> bool:
         return key in self._sessions

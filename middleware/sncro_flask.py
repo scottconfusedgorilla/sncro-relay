@@ -5,25 +5,49 @@ Usage:
     from sncro_flask import init_sncro
 
     app = Flask(__name__)
-    init_sncro(app, relay_url="https://relay.sncro.net")
+    if app.debug:
+        init_sncro(app, relay_url="https://relay.sncro.net")
 """
 
+import html as _html
+import json
+import re
 import urllib.request
 import urllib.error
 
 from flask import Flask, request, make_response
 
-SNCRO_COOKIE = "sncro_key"
-SCRIPT_TAG = '<script src="{relay}/static/agent.js" data-key="{key}" data-relay="{relay}"></script>'
+# Cookies are read by agent.js (must be non-httponly) and only flow same-site.
+SNCRO_KEY_COOKIE = "sncro_key"
+SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
+KEY_RE = re.compile(r"^\d{9}$")
+SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _normalize_key(k):
+    return k.replace("-", "").replace(" ", "").strip()
+
+
+def _key_is_valid(k):
+    return bool(KEY_RE.fullmatch(k))
+
+
+def _error_page(title, status, hint):
+    return f"""<!DOCTYPE html>
+<html><head><title>sncro — {_html.escape(title)}</title>
+<style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
+.status {{ font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }}
+.hint {{ color: #666; margin-top: 10px; line-height: 1.6; }}</style></head>
+<body><h2>sncro</h2>
+<p class="status">{_html.escape(status)}</p>
+<p class="hint">{hint}</p>
+</body></html>"""
 
 
 def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     """Initialize sncro on a Flask app. Adds routes and response injection."""
 
     relay = relay_url.rstrip("/")
-
-    def _normalize_key(k):
-        return k.replace("-", "").replace(" ", "").strip()
 
     @app.route("/sncro/healthcheck")
     def sncro_healthcheck():
@@ -89,36 +113,37 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 
     @app.route("/sncro/enable/<key>")
     def sncro_enable(key):
+        """Enable sncro. See FastAPI middleware docstring for full notes."""
         key = _normalize_key(key)
-        # Try to consume the key (single-use)
+        if not _key_is_valid(key):
+            return _error_page("invalid key", "Invalid session code",
+                               "Codes are 9 digits (e.g. 787-221-713).<br>Ask Claude for a new code.")
+
+        browser_secret = ""
         try:
-            req = urllib.request.Request(f"{relay}/session/{key}/consume", method="POST", data=b"")
-            urllib.request.urlopen(req, timeout=5)
+            req = urllib.request.Request(f"{relay}/session/{key}/enable", method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                payload = json.loads(r.read().decode())
+            browser_secret = payload.get("browser_secret", "")
         except urllib.error.HTTPError as e:
             if e.code == 409:
-                return """<!DOCTYPE html>
-<html><head><title>sncro — key already used</title>
-<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
-.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
-.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
-<body><h2>sncro</h2>
-<p class="status">This key has already been used</p>
-<p class="hint">Each session key can only be used in one browser.<br>Ask Claude to create a new session.</p>
-</body></html>"""
+                return _error_page("key already used", "This key has already been used",
+                                   "Each session key can only be used in one browser.<br>Ask Claude to create a new session.")
             if e.code == 404:
-                return """<!DOCTYPE html>
-<html><head><title>sncro — key not found</title>
-<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
-.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
-.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
-<body><h2>sncro</h2>
-<p class="status">Session not found or expired</p>
-<p class="hint">Sessions last 30 minutes. Ask Claude to create a new session.</p>
-</body></html>"""
+                return _error_page("key not found", "Session not found or expired",
+                                   "Sessions last 30 minutes. Ask Claude to create a new session.")
+            return _error_page("relay error", "Could not enable sncro",
+                               "The sncro relay returned an unexpected error. Try again.")
         except Exception:
-            pass
+            # Fail closed — don't set a cookie if we couldn't verify the key.
+            return _error_page("relay unreachable", "Could not reach the sncro relay",
+                               "Check your network and try again.")
 
-        html = """<!DOCTYPE html>
+        if not SECRET_RE.fullmatch(browser_secret):
+            return _error_page("relay error", "Invalid response from relay",
+                               "The relay did not return a valid browser secret.")
+
+        body = """<!DOCTYPE html>
 <html><head><title>sncro enabled</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
@@ -149,15 +174,20 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     }, 1000);
   </script>
 </body></html>"""
-        resp = make_response(html)
-        resp.set_cookie(SNCRO_COOKIE, key, httponly=False, samesite="Lax")
+        resp = make_response(body)
+        cookie_kwargs = dict(httponly=False, secure=True, samesite="Strict", max_age=1800, path="/")
+        resp.set_cookie(SNCRO_KEY_COOKIE, key, **cookie_kwargs)
+        resp.set_cookie(SNCRO_BROWSER_SECRET_COOKIE, browser_secret, **cookie_kwargs)
         return resp
 
     @app.route("/sncro/enable/<key>/qrcode")
     def sncro_qrcode(key):
         key = _normalize_key(key)
+        if not _key_is_valid(key):
+            return _error_page("invalid key", "Invalid session code",
+                               "Codes are 9 digits.<br>Ask Claude for a new code.")
         enable_url = f"{request.host_url.rstrip('/')}/sncro/enable/{key}"
-        html = """<!DOCTYPE html>
+        body = """<!DOCTYPE html>
 <html><head><title>sncro — scan to enable</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 60px auto; text-align: center;
@@ -208,11 +238,11 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     }, 1000);
   </script>
 </body></html>""".replace("ENABLE_URL", enable_url)
-        return html
+        return body
 
     @app.route("/sncro/disable")
     def sncro_disable():
-        html = """<!DOCTYPE html>
+        body = """<!DOCTYPE html>
 <html><head><title>sncro disabled</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
@@ -221,14 +251,19 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   <h2>sncro disabled</h2>
   <p>The agent script will no longer be injected.</p>
 </body></html>"""
-        resp = make_response(html)
-        resp.delete_cookie(SNCRO_COOKIE)
+        resp = make_response(body)
+        resp.delete_cookie(SNCRO_KEY_COOKIE, path="/")
+        resp.delete_cookie(SNCRO_BROWSER_SECRET_COOKIE, path="/")
         return resp
 
     @app.after_request
     def sncro_inject(response):
-        key = request.cookies.get(SNCRO_COOKIE)
-        if not key:
+        key = request.cookies.get(SNCRO_KEY_COOKIE) or ""
+        browser_secret = request.cookies.get(SNCRO_BROWSER_SECRET_COOKIE) or ""
+
+        # Reject anything that doesn't match the expected shapes — defence in
+        # depth against cookie-tampering attempts.
+        if not KEY_RE.fullmatch(key) or not SECRET_RE.fullmatch(browser_secret):
             return response
 
         content_type = response.content_type or ""
@@ -240,7 +275,12 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
             return response
 
         data = response.get_data(as_text=True)
-        tag = SCRIPT_TAG.format(relay=relay, key=key)
+        tag = (
+            f'<script src="{_html.escape(relay, quote=True)}/static/agent.js" '
+            f'data-key="{_html.escape(key, quote=True)}" '
+            f'data-secret="{_html.escape(browser_secret, quote=True)}" '
+            f'data-relay="{_html.escape(relay, quote=True)}"></script>'
+        )
 
         if "</body>" in data:
             data = data.replace("</body>", f"{tag}\n</body>")

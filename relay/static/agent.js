@@ -21,10 +21,18 @@
   }
 
   const KEY = script?.getAttribute("data-key") || getCookie("sncro_key") || "";
+  const BROWSER_SECRET = script?.getAttribute("data-secret") || getCookie("sncro_browser_secret") || "";
 
-  if (!KEY) {
-    // No key — silently disabled (don't warn, user may not have enabled sncro)
+  if (!KEY || !BROWSER_SECRET) {
+    // No key/secret pair — silently disabled. The relay rejects unauthenticated calls,
+    // and there's no point trying.
     return;
+  }
+
+  // Every relay HTTP call carries the browser secret as a header. Without this,
+  // anyone who happened to know the 9-digit key could read the live session.
+  function authHeaders(extra) {
+    return Object.assign({ "X-Sncro-Secret": BROWSER_SECRET }, extra || {});
   }
 
   const POLL_INTERVAL = 2000; // ms between polls for pending requests
@@ -82,7 +90,7 @@
     try {
       await fetch(`${RELAY}/session/${KEY}/snapshot`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           console: logs.slice(-50),
           errors: errors.slice(-20),
@@ -242,7 +250,8 @@
   async function pollForRequests() {
     try {
       const resp = await fetch(
-        `${RELAY}/session/${KEY}/request/pending?timeout=15`
+        `${RELAY}/session/${KEY}/request/pending?timeout=15`,
+        { headers: authHeaders() }
       );
       const data = await resp.json();
 
@@ -254,7 +263,7 @@
 
       await fetch(`${RELAY}/session/${KEY}/response`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           request_id: data.request_id,
           data: result.error ? {} : result,
@@ -283,5 +292,5 @@
     }
   })();
 
-  console.info(`[sncro] Agent active — key: ${KEY.substring(0, 4)}****`);
+  console.info("[sncro] Agent active");
 })();

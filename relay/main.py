@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
@@ -261,6 +261,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
         digits = ''.join(secrets.choice('0123456789') for _ in range(9))
     session_key = digits
     session_secret = secrets.token_hex(16)  # 32 hex chars — only Claude knows this
+    browser_secret = secrets.token_hex(16)  # 32 hex chars — agent.js gets this via /enable, never returned to MCP
 
     # Log session to database
     db_id = ""
@@ -276,7 +277,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
         except Exception:
             pass  # Don't block session creation if logging fails
 
-    store.ensure_session(session_key, secret=session_secret, db_id=db_id)
+    store.ensure_session(session_key, secret=session_secret, browser_secret=browser_secret, db_id=db_id)
 
     # Build the full enable URL — resolve the actual canonical domain
     raw_domain = project["domain"] if sb and project else None
@@ -730,41 +731,36 @@ class ResponsePayload(BaseModel):
     error: str | None = None
 
 
-# --- Snapshot endpoints (baseline, one-way) ---
+# --- Browser-facing HTTP endpoints (called by agent.js only) ---
+# All require the X-Sncro-Secret header set from the sncro_browser_secret cookie.
+# MCP tools talk to the in-memory store directly, never via HTTP.
+
+def _require_browser_secret(key: str, request: Request) -> None:
+    """Reject the request unless the X-Sncro-Secret header matches the stored
+    browser_secret for this key. Also acts as a 'session must exist' check
+    (no implicit ensure_session, which would let unauthenticated callers
+    spam in-memory state — see security finding M-4)."""
+    if not store.has_session(key):
+        raise HTTPException(404, "Session not found")
+    secret = request.headers.get("x-sncro-secret", "")
+    if not store.verify_browser_secret(key, secret):
+        raise HTTPException(403, "Invalid browser secret")
+    store.touch(key)
+
 
 @app.post("/session/{key}/snapshot")
-async def push_snapshot(key: str, payload: SnapshotPayload):
+async def push_snapshot(key: str, payload: SnapshotPayload, request: Request):
     """agent.js pushes baseline data (console, errors)."""
-    store.ensure_session(key)
+    _require_browser_secret(key, request)
     store.set_snapshot(key, payload.model_dump())
     _mark_session_connected(key)
     return {"ok": True}
 
 
-@app.get("/session/{key}/snapshot")
-async def get_snapshot(key: str):
-    """MCP server reads latest baseline data."""
-    store.ensure_session(key)
-    snapshot = store.get_snapshot(key)
-    if snapshot is None:
-        raise HTTPException(404, "No snapshot yet")
-    return snapshot
-
-
-# --- Request/response endpoints (two-way, long-poll) ---
-
-@app.post("/session/{key}/request")
-async def post_request(key: str, payload: RequestPayload):
-    """MCP server posts a query for the browser to fulfill."""
-    store.ensure_session(key)
-    store.add_request(key, payload.model_dump())
-    return {"ok": True, "request_id": payload.request_id}
-
-
 @app.get("/session/{key}/request/pending")
-async def get_pending_request(key: str, timeout: int = LONG_POLL_TIMEOUT):
-    """agent.js long-polls for pending requests."""
-    store.ensure_session(key)
+async def get_pending_request(key: str, request: Request, timeout: int = LONG_POLL_TIMEOUT):
+    """agent.js long-polls for pending requests from the MCP side."""
+    _require_browser_secret(key, request)
     deadline = time.time() + min(timeout, LONG_POLL_TIMEOUT)
     while time.time() < deadline:
         req = store.pop_request(key)
@@ -775,42 +771,43 @@ async def get_pending_request(key: str, timeout: int = LONG_POLL_TIMEOUT):
 
 
 @app.post("/session/{key}/response")
-async def post_response(key: str, payload: ResponsePayload):
+async def post_response(key: str, payload: ResponsePayload, request: Request):
     """agent.js posts the result of a fulfilled request."""
-    store.ensure_session(key)
+    _require_browser_secret(key, request)
     store.add_response(key, payload.request_id, payload.model_dump())
     return {"ok": True}
 
 
-@app.get("/session/{key}/response/{request_id}")
-async def get_response(key: str, request_id: str, timeout: int = LONG_POLL_TIMEOUT):
-    """MCP server long-polls for a specific request's response."""
-    store.ensure_session(key)
-    deadline = time.time() + min(timeout, LONG_POLL_TIMEOUT)
-    while time.time() < deadline:
-        resp = store.pop_response(key, request_id)
-        if resp is not None:
-            return resp
-        await asyncio.sleep(0.5)
-    raise HTTPException(408, "Timeout waiting for browser response")
+# Note: GET /session/{key}/snapshot, POST /session/{key}/request, and GET
+# /session/{key}/response/{id} were removed in build 085. They were exposed
+# but never used — MCP tool handlers talk to the in-memory store directly,
+# not via HTTP. Removing them shrinks attack surface.
 
 
 # --- Session management ---
 
 @app.get("/session/{key}/status")
 async def session_status(key: str):
-    """Check if a session key is active."""
+    """Check if a session key is active. Public — only returns a boolean."""
     return {"active": store.has_session(key)}
 
 
-@app.post("/session/{key}/consume")
-async def consume_session(key: str):
-    """Mark a session key as consumed (bound to one browser). Returns error if already consumed."""
+@app.post("/session/{key}/enable")
+async def enable_session(key: str):
+    """Mark a session as consumed AND return the browser_secret.
+
+    Called server-to-server by the customer-app middleware on /sncro/enable/{key}.
+    The middleware then sets sncro_key + sncro_browser_secret cookies; agent.js
+    reads them and authenticates every relay HTTP call with X-Sncro-Secret.
+
+    Replaces the older /consume endpoint (was: just consume, no auth tying
+    agent.js to the session).
+    """
     if not store.has_session(key):
         raise HTTPException(404, "Session not found")
     if not store.consume(key):
         raise HTTPException(409, "This session key has already been used. Ask Claude to create a new session.")
-    return {"ok": True}
+    return {"ok": True, "browser_secret": store.get_browser_secret(key)}
 
 
 # --- Client downloads ---

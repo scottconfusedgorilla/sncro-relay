@@ -2,14 +2,17 @@
 Drop-in sncro middleware for FastAPI projects.
 
 Usage:
-    from sncro.middleware import SncroMiddleware, sncro_routes
+    from sncro_middleware import SncroMiddleware, sncro_routes
 
-    app = FastAPI()
-    app.include_router(sncro_routes)
-    app.add_middleware(SncroMiddleware, relay_url="https://sncro.net")
+    app = FastAPI(debug=True)  # ONLY load sncro when debug — see below
+    if app.debug:
+        app.include_router(sncro_routes)
+        app.add_middleware(SncroMiddleware, relay_url="https://relay.sncro.net")
 """
 
-import secrets
+import html
+import json
+import re
 import urllib.request
 import urllib.error
 
@@ -17,14 +20,17 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-SNCRO_COOKIE = "sncro_key"
-SCRIPT_TAG = '<script src="{relay}/static/agent.js" data-key="{key}" data-relay="{relay}"></script>'
+# Cookies are read by agent.js (must be non-httponly) and only flow same-site.
+SNCRO_KEY_COOKIE = "sncro_key"
+SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
+KEY_RE = re.compile(r"^\d{9}$")
+SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class SncroMiddleware(BaseHTTPMiddleware):
     """Injects the sncro agent script into HTML responses when enabled."""
 
-    def __init__(self, app, relay_url: str = "https://sncro.net"):
+    def __init__(self, app, relay_url: str = "https://relay.sncro.net"):
         super().__init__(app)
         self.relay_url = relay_url.rstrip("/")
         app._sncro_relay_url = self.relay_url
@@ -32,20 +38,32 @@ class SncroMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
 
-        key = request.cookies.get(SNCRO_COOKIE)
-        if not key:
+        key = request.cookies.get(SNCRO_KEY_COOKIE) or ""
+        browser_secret = request.cookies.get(SNCRO_BROWSER_SECRET_COOKIE) or ""
+
+        # Reject anything that doesn't match the expected shapes — defence in
+        # depth against cookie-tampering attempts that try to break out of the
+        # data-* attributes below.
+        if not KEY_RE.fullmatch(key) or not SECRET_RE.fullmatch(browser_secret):
             return response
 
         content_type = response.headers.get("content-type", "")
         if "text/html" not in content_type:
             return response
 
-        # Read body and inject script before </body>
         body = b""
         async for chunk in response.body_iterator:
             body += chunk if isinstance(chunk, bytes) else chunk.encode()
 
-        tag = SCRIPT_TAG.format(relay=self.relay_url, key=key)
+        # All three values are validated as digits/hex above — the html.escape
+        # is belt-and-suspenders so a future change can't introduce XSS via
+        # the data-* attributes.
+        tag = (
+            f'<script src="{html.escape(self.relay_url, quote=True)}/static/agent.js" '
+            f'data-key="{html.escape(key, quote=True)}" '
+            f'data-secret="{html.escape(browser_secret, quote=True)}" '
+            f'data-relay="{html.escape(self.relay_url, quote=True)}"></script>'
+        )
         body_str = body.decode()
 
         if "</body>" in body_str:
@@ -71,6 +89,22 @@ sncro_routes = APIRouter(prefix="/sncro", tags=["sncro"])
 def _normalize_key(key: str) -> str:
     """Strip dashes/spaces from a session key (787-221-713 -> 787221713)."""
     return key.replace("-", "").replace(" ", "").strip()
+
+
+def _key_is_valid(key: str) -> bool:
+    return bool(KEY_RE.fullmatch(key))
+
+
+def _error_page(title: str, status: str, hint: str) -> HTMLResponse:
+    return HTMLResponse(content=f"""<!DOCTYPE html>
+<html><head><title>sncro — {html.escape(title)}</title>
+<style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
+.status {{ font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }}
+.hint {{ color: #666; margin-top: 10px; line-height: 1.6; }}</style></head>
+<body><h2>sncro</h2>
+<p class="status">{html.escape(status)}</p>
+<p class="hint">{hint}</p>
+</body></html>""")
 
 
 @sncro_routes.get("/healthcheck")
@@ -143,37 +177,49 @@ async def sncro_enable_prompt():
 
 @sncro_routes.get("/enable/{key}", response_class=HTMLResponse)
 async def sncro_enable(key: str, request: Request):
-    """Enable sncro with a key from Claude's create_session tool."""
+    """Enable sncro with a key from Claude's create_session tool.
+
+    Calls the relay's /enable endpoint, which:
+      - 404 if the key doesn't exist
+      - 409 if the key has already been consumed (single-use)
+      - 200 + browser_secret on success
+
+    The browser_secret authenticates every subsequent agent.js HTTP call.
+    Without it, anyone who knew the 9-digit key could read the live session.
+    """
     key = _normalize_key(key)
+    if not _key_is_valid(key):
+        return _error_page("invalid key", "Invalid session code",
+                           "Codes are 9 digits (e.g. 787-221-713).<br>Ask Claude for a new code.")
+
     relay_url = getattr(request.app, '_sncro_relay_url', 'https://relay.sncro.net')
+    browser_secret = ""
     try:
-        req = urllib.request.Request(f"{relay_url}/session/{key}/consume", method="POST", data=b"")
-        urllib.request.urlopen(req, timeout=5)
+        req = urllib.request.Request(f"{relay_url}/session/{key}/enable", method="POST", data=b"")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            payload = json.loads(r.read().decode())
+        browser_secret = payload.get("browser_secret", "")
     except urllib.error.HTTPError as e:
         if e.code == 409:
-            return HTMLResponse(content="""<!DOCTYPE html>
-<html><head><title>sncro — key already used</title>
-<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
-.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
-.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
-<body><h2>sncro</h2>
-<p class="status">This key has already been used</p>
-<p class="hint">Each session key can only be used in one browser.<br>Ask Claude to create a new session.</p>
-</body></html>""")
+            return _error_page("key already used", "This key has already been used",
+                               "Each session key can only be used in one browser.<br>Ask Claude to create a new session.")
         if e.code == 404:
-            return HTMLResponse(content="""<!DOCTYPE html>
-<html><head><title>sncro — key not found</title>
-<style>body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
-.status { font-size: 1.4em; color: #dc2626; margin: 30px 0 10px; }
-.hint { color: #666; margin-top: 10px; line-height: 1.6; }</style></head>
-<body><h2>sncro</h2>
-<p class="status">Session not found or expired</p>
-<p class="hint">Sessions last 30 minutes. Ask Claude to create a new session.</p>
-</body></html>""")
+            return _error_page("key not found", "Session not found or expired",
+                               "Sessions last 30 minutes. Ask Claude to create a new session.")
+        return _error_page("relay error", "Could not enable sncro",
+                           "The sncro relay returned an unexpected error. Try again.")
     except Exception:
-        pass  # If relay is unreachable, allow enabling anyway
+        # Fail closed: don't set a cookie if we couldn't authenticate the key
+        # against the relay. Previously this was a "fail open" path that set a
+        # cookie for an unverified key.
+        return _error_page("relay unreachable", "Could not reach the sncro relay",
+                           "Check your network and try again.")
 
-    html = """<!DOCTYPE html>
+    if not SECRET_RE.fullmatch(browser_secret):
+        return _error_page("relay error", "Invalid response from relay",
+                           "The relay did not return a valid browser secret.")
+
+    html_body = """<!DOCTYPE html>
 <html><head><title>sncro enabled</title>
 <style>
   body { font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }
@@ -205,8 +251,14 @@ async def sncro_enable(key: str, request: Request):
   </script>
 </body></html>"""
 
-    response = HTMLResponse(content=html)
-    response.set_cookie(SNCRO_COOKIE, key, httponly=False, samesite="lax")
+    response = HTMLResponse(content=html_body)
+    # Cookies are non-httponly so agent.js can read them. Defence is via:
+    #   - secure: HTTPS-only
+    #   - samesite=strict: don't flow on cross-site requests (helps mitigate C-1)
+    #   - 30-minute max_age: matches relay session lifetime
+    cookie_kwargs = dict(httponly=False, secure=True, samesite="strict", max_age=1800, path="/")
+    response.set_cookie(SNCRO_KEY_COOKIE, key, **cookie_kwargs)
+    response.set_cookie(SNCRO_BROWSER_SECRET_COOKIE, browser_secret, **cookie_kwargs)
     return response
 
 
@@ -214,6 +266,9 @@ async def sncro_enable(key: str, request: Request):
 async def sncro_qrcode(key: str, request: Request):
     """Show a QR code for the enable URL — each key is single-use per device."""
     key = _normalize_key(key)
+    if not _key_is_valid(key):
+        return _error_page("invalid key", "Invalid session code",
+                           "Codes are 9 digits.<br>Ask Claude for a new code.")
     base = str(request.base_url).rstrip("/")
     enable_url = f"{base}/sncro/enable/{key}"
     html = """<!DOCTYPE html>
@@ -285,5 +340,6 @@ async def sncro_disable():
 </body></html>"""
 
     response = HTMLResponse(content=html)
-    response.delete_cookie(SNCRO_COOKIE)
+    response.delete_cookie(SNCRO_KEY_COOKIE, path="/")
+    response.delete_cookie(SNCRO_BROWSER_SECRET_COOKIE, path="/")
     return response
