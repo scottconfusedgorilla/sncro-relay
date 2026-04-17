@@ -17,10 +17,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from mcp.server.transport_security import TransportSecuritySettings
 
 from relay.store import SessionStore
+
+
+def _client_ip(request: Request) -> str:
+    """Rate-limit key: real client IP from X-Forwarded-For (Railway is behind a
+    proxy, so request.client.host is the proxy's IP). Falls back to the default."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+# Global defaults are generous; tighter per-route limits are applied via
+# @limiter.limit(...) below on sensitive endpoints.
+limiter = Limiter(key_func=_client_ip, default_limits=["600/minute"])
 
 # Cache resolved domains for 5 minutes
 _domain_cache: dict[str, tuple[str, float]] = {}
@@ -171,6 +188,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="sncro", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -803,6 +822,7 @@ def _require_browser_secret(key: str, request: Request) -> None:
 
 
 @app.post("/session/{key}/snapshot")
+@limiter.limit("600/minute")
 async def push_snapshot(key: str, payload: SnapshotPayload, request: Request):
     """agent.js pushes baseline data (console, errors)."""
     _require_browser_secret(key, request)
@@ -812,6 +832,7 @@ async def push_snapshot(key: str, payload: SnapshotPayload, request: Request):
 
 
 @app.get("/session/{key}/request/pending")
+@limiter.limit("600/minute")
 async def get_pending_request(key: str, request: Request, timeout: int = LONG_POLL_TIMEOUT):
     """agent.js long-polls for pending requests from the MCP side."""
     _require_browser_secret(key, request)
@@ -825,6 +846,7 @@ async def get_pending_request(key: str, request: Request, timeout: int = LONG_PO
 
 
 @app.post("/session/{key}/response")
+@limiter.limit("600/minute")
 async def post_response(key: str, payload: ResponsePayload, request: Request):
     """agent.js posts the result of a fulfilled request."""
     _require_browser_secret(key, request)
@@ -841,21 +863,24 @@ async def post_response(key: str, payload: ResponsePayload, request: Request):
 # --- Session management ---
 
 @app.get("/session/{key}/status")
-async def session_status(key: str):
+@limiter.limit("120/minute")
+async def session_status(key: str, request: Request):
     """Check if a session key is active. Public — only returns a boolean."""
     return {"active": store.has_session(key)}
 
 
 @app.post("/session/{key}/enable")
-async def enable_session(key: str):
+@limiter.limit("10/minute")
+async def enable_session(key: str, request: Request):
     """Mark a session as consumed AND return the browser_secret.
 
     Called server-to-server by the customer-app middleware on /sncro/enable/{key}.
     The middleware then sets sncro_key + sncro_browser_secret cookies; agent.js
     reads them and authenticates every relay HTTP call with X-Sncro-Secret.
 
-    Replaces the older /consume endpoint (was: just consume, no auth tying
-    agent.js to the session).
+    Rate limited per-IP to 10/min to close the H-4/NEW-3 residual — anyone who
+    learns a live session_key could otherwise race the legitimate browser to
+    this endpoint to steal the browser_secret.
     """
     if not store.has_session(key):
         raise HTTPException(404, "Session not found")
@@ -867,7 +892,8 @@ async def enable_session(key: str):
 # --- Client downloads ---
 
 @app.get("/client/fastapi")
-async def download_fastapi_client():
+@limiter.limit("30/minute")
+async def download_fastapi_client(request: Request):
     """Serve the FastAPI middleware file for download."""
     from fastapi.responses import FileResponse
     middleware_path = Path(__file__).parent.parent / "middleware" / "sncro_middleware.py"
@@ -877,7 +903,8 @@ async def download_fastapi_client():
 
 
 @app.get("/client/flask")
-async def download_flask_client():
+@limiter.limit("30/minute")
+async def download_flask_client(request: Request):
     """Serve the Flask middleware file for download."""
     from fastapi.responses import FileResponse
     middleware_path = Path(__file__).parent.parent / "middleware" / "sncro_flask.py"
