@@ -112,8 +112,66 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 </body></html>"""
 
     @app.route("/sncro/enable/<key>")
+    def sncro_enable_confirm_page(key):
+        """Show a confirmation page. Does NOT consume the key or set cookies.
+
+        Why a confirmation step: an attacker who created the session has the
+        session_secret. If they can phish a victim into clicking
+        /sncro/enable/{key} on the victim's app, the cookie is set and
+        agent.js starts pushing live data — which the attacker can read via
+        MCP tools. Requiring an explicit Allow click means a phishing target
+        won't grant access by accident.
+        """
+        key = _normalize_key(key)
+        if not _key_is_valid(key):
+            return _error_page("invalid key", "Invalid session code",
+                               "Codes are 9 digits (e.g. 787-221-713).<br>Ask Claude for a new code.")
+
+        display = f"{key[0:3]}-{key[3:6]}-{key[6:9]}"
+        host = _html.escape(request.host or "this site", quote=True)
+        safe_key = _html.escape(key, quote=True)
+        return f"""<!DOCTYPE html>
+<html><head><title>sncro — allow access?</title>
+<style>
+  body {{ font-family: system-ui; max-width: 540px; margin: 60px auto; padding: 0 20px; }}
+  h2 {{ text-align: center; margin-bottom: 8px; }}
+  .lead {{ text-align: center; color: #444; margin-bottom: 24px; }}
+  .panel {{ background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 20px 0; }}
+  .code {{ font-family: monospace; font-size: 1.6em; font-weight: 700; letter-spacing: 0.05em; text-align: center; color: #111; }}
+  .warn {{ color: #92400e; background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 6px; margin: 16px 0; font-size: 0.9em; line-height: 1.5; }}
+  .row {{ display: flex; gap: 12px; justify-content: center; margin-top: 24px; }}
+  .btn {{ padding: 12px 24px; font-size: 1em; border-radius: 8px; cursor: pointer; border: none; }}
+  .btn-allow {{ background: #16a34a; color: white; }}
+  .btn-allow:hover {{ background: #15803d; }}
+  .btn-deny {{ background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }}
+  .btn-deny:hover {{ background: #e5e7eb; }}
+  .meta {{ color: #6b7280; font-size: 0.85em; text-align: center; margin-top: 16px; line-height: 1.6; }}
+</style></head>
+<body>
+  <h2>Allow sncro debugging?</h2>
+  <p class="lead">An AI assistant is asking to inspect this browser on <strong>{host}</strong>.</p>
+
+  <div class="panel">
+    <div class="code">{display}</div>
+  </div>
+
+  <div class="warn">
+    <strong>Only allow this if you asked Claude (or another AI) to debug this page.</strong>
+    Once allowed, the AI can read what you see, what you type into forms,
+    your console errors, and your network activity for the next 30 minutes.
+  </div>
+
+  <form method="POST" action="/sncro/enable/{safe_key}/confirm" class="row">
+    <button type="submit" class="btn btn-allow">Allow</button>
+    <button type="button" class="btn btn-deny" onclick="history.back()">Cancel</button>
+  </form>
+
+  <p class="meta">If you didn't expect this, just close the tab. Nothing is enabled until you click Allow.</p>
+</body></html>"""
+
+    @app.route("/sncro/enable/<key>/confirm", methods=["POST"])
     def sncro_enable(key):
-        """Enable sncro. See FastAPI middleware docstring for full notes."""
+        """Actually enable sncro after the user clicked Allow on the confirm page."""
         key = _normalize_key(key)
         if not _key_is_valid(key):
             return _error_page("invalid key", "Invalid session code",
@@ -135,7 +193,6 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
             return _error_page("relay error", "Could not enable sncro",
                                "The sncro relay returned an unexpected error. Try again.")
         except Exception:
-            # Fail closed — don't set a cookie if we couldn't verify the key.
             return _error_page("relay unreachable", "Could not reach the sncro relay",
                                "Check your network and try again.")
 

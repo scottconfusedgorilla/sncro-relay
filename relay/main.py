@@ -1,9 +1,12 @@
 """sncro relay — keyed long-poll rendezvous server + MCP server."""
 
 import asyncio
+import ipaddress
 import os
 import secrets
+import socket
 import time
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -23,10 +26,66 @@ from relay.store import SessionStore
 _domain_cache: dict[str, tuple[str, float]] = {}
 DOMAIN_CACHE_TTL = 300  # seconds
 
+# SSRF guard — reserved TLDs that should never be probed.
+_BLOCKED_TLDS = (".internal", ".local", ".localhost", ".onion", ".test", ".invalid", ".example")
+
+
+def _hostname_is_safe(hostname: str) -> bool:
+    """SSRF defence — reject anything that resolves to a private/loopback/link-local address.
+
+    Without this, a customer can register a domain that resolves to (or
+    redirects to) an internal IP and trick the relay into probing it.
+    The relay process holds SUPABASE_SERVICE_ROLE_KEY in its env, so any
+    internal-network probe is a real concern.
+    """
+    if not hostname:
+        return False
+    h = hostname.lower().strip()
+    if any(h.endswith(tld) for tld in _BLOCKED_TLDS):
+        return False
+    # Bare 'localhost'
+    if h == "localhost":
+        return False
+    # Resolve all A/AAAA records and reject if any are private/loopback/etc.
+    try:
+        addrinfo = socket.getaddrinfo(h, None)
+    except Exception:
+        # Can't resolve: refuse rather than guess.
+        return False
+    for family, _type, _proto, _canon, sockaddr in addrinfo:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False
+    return True
+
+
+def _safe_get(client, url: str):
+    """GET that validates the host BEFORE making the request, and refuses to
+    follow cross-host redirects (must follow_redirects=False on client)."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        return None
+    if not _hostname_is_safe(parsed.hostname or ""):
+        return None
+    try:
+        return client.get(url)
+    except Exception:
+        return None
+
 
 def _resolve_domain(raw_domain: str) -> str:
     """Probe the middleware healthcheck to find the canonical domain.
-    Follows redirects to handle www/non-www, vanity domains, etc."""
+
+    Tries the stored domain, then common www/non-www variants, then a
+    one-hop redirect from the root. All probes are guarded by
+    _hostname_is_safe — no internal addresses, no reserved TLDs.
+    Redirects are NOT auto-followed; we do at most one explicit hop and
+    re-check the host of the new target before fetching."""
     import httpx
 
     now = time.time()
@@ -50,43 +109,38 @@ def _resolve_domain(raw_domain: str) -> str:
     else:
         candidates.append(f"https://www.{domain_part}")
 
-    try:
-        with httpx.Client(follow_redirects=True, timeout=5) as client:
-            for candidate in candidates:
-                try:
-                    resp = client.get(f"{candidate}/sncro/healthcheck")
-                    if resp.status_code == 200:
-                        final_url = str(resp.url)
-                        resolved = final_url.rsplit("/sncro/healthcheck", 1)[0]
-                        _domain_cache[raw_domain] = (resolved, now)
-                        return resolved
-                except Exception:
-                    continue
-    except Exception:
-        pass
+    with httpx.Client(follow_redirects=False, timeout=5) as client:
+        for candidate in candidates:
+            resp = _safe_get(client, f"{candidate}/sncro/healthcheck")
+            if resp is not None and resp.status_code == 200:
+                _domain_cache[raw_domain] = (candidate, now)
+                return candidate
 
-    # Fallback: follow root redirect to discover the actual domain
-    try:
-        with httpx.Client(follow_redirects=True, timeout=5) as client:
-            resp = client.get(base)
-            if resp.status_code == 200:
-                final_url = str(resp.url).rstrip("/")
-                # Check if the redirected domain has the healthcheck
-                try:
-                    hc = client.get(f"{final_url}/sncro/healthcheck")
-                    if hc.status_code == 200:
-                        resolved = str(hc.url).rsplit("/sncro/healthcheck", 1)[0]
-                        _domain_cache[raw_domain] = (resolved, now)
-                        return resolved
-                except Exception:
-                    pass
-    except Exception:
-        pass
+        # Fallback: one-hop root probe to discover a redirected canonical
+        # domain. We follow exactly one Location header and re-validate
+        # the destination host before probing it.
+        resp = _safe_get(client, base)
+        if resp is not None and 300 <= resp.status_code < 400:
+            location = resp.headers.get("location", "")
+            if location:
+                # Resolve relative redirects
+                if location.startswith("/"):
+                    parsed_base = urllib.parse.urlparse(base)
+                    location = f"{parsed_base.scheme}://{parsed_base.netloc}{location}"
+                redirected_root = location.rstrip("/")
+                # Strip any path component — we only care about scheme://host
+                p = urllib.parse.urlparse(redirected_root)
+                redirected_origin = f"{p.scheme}://{p.netloc}"
+                hc = _safe_get(client, f"{redirected_origin}/sncro/healthcheck")
+                if hc is not None and hc.status_code == 200:
+                    _domain_cache[raw_domain] = (redirected_origin, now)
+                    return redirected_origin
 
-    # Final fallback: use the stored domain as-is
-    resolved = base
-    _domain_cache[raw_domain] = (resolved, now)
-    return resolved
+    # Final fallback: use the stored domain as-is. Whatever calls this is
+    # going to construct an enable URL with it; if the host turns out to
+    # be unreachable, the user just sees a network error in their browser.
+    _domain_cache[raw_domain] = (base, now)
+    return base
 
 # Optional Supabase for quota enforcement (relay works without it for local dev)
 _supabase_client = None
