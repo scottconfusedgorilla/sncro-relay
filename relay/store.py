@@ -1,6 +1,7 @@
 """In-memory session store for the sncro relay."""
 
 import asyncio
+import secrets
 import time
 from collections import deque
 
@@ -78,13 +79,13 @@ class SessionStore:
         }
 
     def verify_secret(self, key: str, secret: str) -> bool:
-        """Check if the secret matches. Returns True if no secret was set (legacy)."""
+        """Constant-time secret check. Returns False if no secret was stored."""
         if key not in self._sessions:
             return False
         stored = self._sessions[key].get("secret", "")
-        if not stored:
-            return True  # No secret set — legacy session, allow access
-        return stored == secret
+        if not stored or not secret:
+            return False
+        return secrets.compare_digest(stored, secret)
 
     def has_session(self, key: str) -> bool:
         return key in self._sessions

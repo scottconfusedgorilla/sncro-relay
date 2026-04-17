@@ -195,15 +195,18 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
                 }
             project = rows[0]
 
-            # Check guest access
-            if not project.get("allow_guests", True) and git_user:
+            # Check guest access — fail closed when allow_guests is off
+            if not project.get("allow_guests", True):
+                denied = {
+                    "error": "GUEST_ACCESS_DENIED",
+                    "message": "This project has guest access disabled — only the project owner can create sncro sessions. Tell the user: the project owner needs to enable 'Allow guest access' in their sncro dashboard at https://www.sncro.net/dashboard, or you need to register your own project.",
+                }
+                if not git_user:
+                    return denied
                 owner_resp = sb.table("profiles").select("github_username").eq("id", project["user_id"]).execute()
                 owner_name = owner_resp.data[0]["github_username"] if owner_resp.data else ""
                 if git_user.lower() != owner_name.lower():
-                    return {
-                        "error": "GUEST_ACCESS_DENIED",
-                        "message": "This project has guest access disabled — only the project owner can create sncro sessions. Tell the user: the project owner needs to enable 'Allow guest access' in their sncro dashboard at https://www.sncro.net/dashboard, or you need to register your own project.",
-                    }
+                    return denied
 
             # Check plan limits
             user_id = project["user_id"]
