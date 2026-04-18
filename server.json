@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.scottconfusedgorilla/sncro",
+  "title": "sncro",
+  "description": "Live browser debugging for AI assistants — DOM, console, network via MCP. Drop-in FastAPI and Flask plugins, Django/Rails/Express PRs welcome.",
+  "websiteUrl": "https://sncro.net",
+  "repository": {
+    "url": "https://github.com/scottconfusedgorilla/sncro-relay",
+    "source": "github"
+  },
+  "version": "0.9.4",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://relay.sncro.net/tools/mcp"
+    }
+  ]
+}
