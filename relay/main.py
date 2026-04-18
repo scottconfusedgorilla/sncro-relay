@@ -255,6 +255,30 @@ submitting. Use report_issue with category "success_story". Keep it
 general — no proprietary details. These appear publicly on sncro.net.
 """)
 
+# Advertise tools/listChanged so well-behaved MCP clients re-fetch the tool
+# list when we ship a new tool. FastMCP defaults to listChanged=False (the
+# tool set is registered at module load and never changes), but we want to
+# leave room for clients that DO refresh on notification — Claude Desktop
+# clients today are sticky, but future versions and other clients may listen.
+# Override create_initialization_options on the underlying low-level Server
+# so the StreamableHTTPSessionManager picks up our notification options.
+from mcp.server.lowlevel.server import NotificationOptions as _NotificationOptions
+
+_lowlevel_server = mcp._mcp_server
+_orig_create_init = _lowlevel_server.create_initialization_options
+
+
+def _create_init_options_with_listchanged(
+    notification_options=None, experimental_capabilities=None
+):
+    return _orig_create_init(
+        notification_options=notification_options or _NotificationOptions(tools_changed=True),
+        experimental_capabilities=experimental_capabilities,
+    )
+
+
+_lowlevel_server.create_initialization_options = _create_init_options_with_listchanged
+
 
 @mcp.tool()
 async def create_session(project_key: str, git_user: str = "") -> dict:
