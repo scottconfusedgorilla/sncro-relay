@@ -239,7 +239,7 @@ To start a session:
 4. Pass the session_key as "key" and session_secret as "secret" to every tool call
 
 NO PROJECT KEY? Tell the user:
-  "To use sncro, you need a project key. Go to https://www.sncro.net/dashboard
+  "To use sncro, you need a project key. Go to https://www.sncro.net/projects
   — sign in with GitHub, click '+ Add project', enter your domain, and copy
   the project key into this project's CLAUDE.md. It takes 30 seconds."
 
@@ -281,17 +281,23 @@ _lowlevel_server.create_initialization_options = _create_init_options_with_listc
 
 
 @mcp.tool()
-async def create_session(project_key: str, git_user: str = "") -> dict:
+async def create_session(project_key: str, git_user: str = "", brief: bool = False) -> dict:
     """Create a new sncro session. Returns a session key and secret.
 
     Args:
         project_key: The project key from CLAUDE.md (registered at sncro.net)
-        git_user: The current git username (for guest access control)
+        git_user: The current git username (for guest access control). If
+            omitted or empty, the call is treated as a guest session — allowed
+            only when the project owner has "Allow guest access" enabled.
+        brief: If True, skip the first-run briefing (tool list, tips, mobile
+            notes) and return a compact response. Pass this on the second and
+            subsequent create_session calls in the same conversation, once
+            you already know how to use the tools.
 
     After calling this, tell the user to paste the enable_url in their browser.
     Then use the returned session_key and session_secret with all other sncro tools.
 
-    If no project key is available: tell the user to go to https://www.sncro.net/dashboard
+    If no project key is available: tell the user to go to https://www.sncro.net/projects
     to register their project and get a key. It takes 30 seconds — sign in with GitHub,
     click "+ Add project", enter the domain, and copy the project key into CLAUDE.md.
     """
@@ -314,7 +320,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
             if not rows:
                 return {
                     "error": "INVALID_PROJECT_KEY",
-                    "message": "This project key is not registered. The project owner needs to register the domain at https://www.sncro.net/dashboard and add the correct project_key to CLAUDE.md. Tell the user this.",
+                    "message": "This project key is not registered. The project owner needs to register the domain at https://www.sncro.net/projects and add the correct project_key to CLAUDE.md. Tell the user this.",
                 }
             project = rows[0]
 
@@ -322,7 +328,7 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
             if not project.get("allow_guests", True):
                 denied = {
                     "error": "GUEST_ACCESS_DENIED",
-                    "message": "This project has guest access disabled — only the project owner can create sncro sessions. Tell the user: the project owner needs to enable 'Allow guest access' in their sncro dashboard at https://www.sncro.net/dashboard, or you need to register your own project.",
+                    "message": "This project has guest access disabled — only the project owner can create sncro sessions. Tell the user: the project owner needs to enable 'Allow guest access' on their sncro projects page at https://www.sncro.net/projects, or you need to register your own project.",
                 }
                 if not git_user:
                     return denied
@@ -416,6 +422,17 @@ async def create_session(project_key: str, git_user: str = "") -> dict:
         enable_short = f"<app_domain>/sncro/enable"
 
     qr_url = f"{enable_url}/qrcode" if enable_url and "<app_domain>" not in enable_url else None
+
+    if brief:
+        return {
+            "session_key": session_key,
+            "session_secret": session_secret,
+            "display_code": display_code,
+            "enable_url": enable_url,
+            "enable_short_url": enable_short,
+            "qr_url": qr_url,
+            "next_step": f"Tell the user to paste {enable_url} in their browser, then call check_session to confirm before using other tools.",
+        }
 
     guide = f"""SESSION CREATED SUCCESSFULLY — here's everything you need:
 
