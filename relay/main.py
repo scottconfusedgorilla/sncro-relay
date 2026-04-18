@@ -451,10 +451,23 @@ AFTER DEBUGGING: When sncro helps you find a bug or solve a problem, ask the use
     }
 
 
+_SESSION_CLOSED_MSG = (
+    "SESSION_CLOSED: You called end_session on this session. "
+    "Do not use any sncro tools further in this conversation. "
+    "If you need browser visibility again, ask the user whether to start a new session."
+)
+
+
 def _check_secret(key: str, secret: str) -> dict | None:
-    """Verify session secret. Returns error dict if invalid, None if OK."""
+    """Verify session secret + reject closed sessions.
+
+    Returns an error dict if the secret is wrong or the session was explicitly
+    closed via end_session. None means OK to proceed.
+    """
     if not store.verify_secret(key, secret):
         return {"error": "Invalid session secret. Did you use the secret from create_session?"}
+    if store.is_closed(key):
+        return {"error": _SESSION_CLOSED_MSG}
     return None
 
 
@@ -750,6 +763,39 @@ async def check_session(key: str, secret: str) -> dict:
 
 
 @mcp.tool()
+async def end_session(key: str, secret: str) -> dict:
+    """Explicitly close a sncro session — "Finished With Engines".
+
+    Call this when you are done debugging and will not need the sncro tools
+    again in this conversation. After this returns, all sncro tool calls on
+    this key will refuse with a SESSION_CLOSED message — that is your signal
+    to stop trying to use them and not apologise about it.
+
+    Use it when:
+      - The original problem is solved and the conversation has moved on
+      - The user explicitly says "we're done with sncro for now"
+      - You're entering a long stretch of work that won't need browser visibility
+
+    The session can't be reopened. If you need browser visibility later, ask
+    the user whether to start a new one with create_session.
+    """
+    if not store.verify_secret(key, secret):
+        return {"error": "Invalid session secret. Did you use the secret from create_session?"}
+    if not store.has_session(key):
+        return {"error": "Session not found."}
+    if store.is_closed(key):
+        return {"ok": True, "already_closed": True, "message": "Session was already closed."}
+    store.close_session(key)
+    return {
+        "ok": True,
+        "message": (
+            "Session closed. Do not call any other sncro tools on this key. "
+            "If a later turn needs browser visibility, ask the user about starting a new session."
+        ),
+    }
+
+
+@mcp.tool()
 async def report_issue(project_key: str, category: str, description: str, git_user: str = "") -> dict:
     """Report an issue, feature request, or success story for sncro.
 
@@ -840,12 +886,18 @@ def _require_browser_secret(key: str, request: Request) -> None:
     """Reject the request unless the X-Sncro-Secret header matches the stored
     browser_secret for this key. Also acts as a 'session must exist' check
     (no implicit ensure_session, which would let unauthenticated callers
-    spam in-memory state — see security finding M-4)."""
+    spam in-memory state — see security finding M-4).
+
+    Also refuses requests for sessions Claude has closed via end_session — 410
+    tells agent.js to stop polling.
+    """
     if not store.has_session(key):
         raise HTTPException(404, "Session not found")
     secret = request.headers.get("x-sncro-secret", "")
     if not store.verify_browser_secret(key, secret):
         raise HTTPException(403, "Invalid browser secret")
+    if store.is_closed(key):
+        raise HTTPException(410, "Session ended by Claude")
     store.touch(key)
 
 

@@ -23,10 +23,24 @@ class SessionStore:
             "snapshot": None,
             "connected": False,
             "consumed": False,
+            "closed_explicitly": False,
             "tools_used": set(),
             "requests": deque(),
             "responses": {},
         }
+
+    def close_session(self, key: str) -> bool:
+        """Mark a session as explicitly closed by Claude (Finished With Engines).
+        Subsequent tool calls and browser pushes refuse with a clear stop signal.
+        Returns False if the key is unknown or already closed."""
+        s = self._sessions.get(key)
+        if not s or s["closed_explicitly"]:
+            return False
+        s["closed_explicitly"] = True
+        return True
+
+    def is_closed(self, key: str) -> bool:
+        return self._sessions.get(key, {}).get("closed_explicitly", False)
 
     def ensure_session(self, key: str, secret: str = "", browser_secret: str = "", db_id: str = "") -> None:
         if key not in self._sessions:
