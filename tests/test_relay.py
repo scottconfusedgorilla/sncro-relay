@@ -167,6 +167,21 @@ class TestEnableEndpoint:
         resp2 = client.post(f"/session/{KEY}/enable")
         assert resp2.status_code == 409
 
+    def test_enable_records_middleware_version(self):
+        _seed_session()
+        resp = client.post(
+            f"/session/{KEY}/enable",
+            headers={"X-Sncro-Middleware-Version": "0.9.4"},
+        )
+        assert resp.status_code == 200
+        assert store.get_middleware_version(KEY) == "0.9.4"
+
+    def test_enable_without_version_header_leaves_version_empty(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable")
+        assert resp.status_code == 200
+        assert store.get_middleware_version(KEY) == ""
+
 
 # --- Contract tests (endpoint shapes) ---
 

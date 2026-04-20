@@ -24,10 +24,21 @@ class SessionStore:
             "connected": False,
             "consumed": False,
             "closed_explicitly": False,
+            "middleware_version": "",
             "tools_used": set(),
             "requests": deque(),
             "responses": {},
         }
+
+    def set_middleware_version(self, key: str, version: str) -> None:
+        """Record the customer-app middleware version (reported via
+        X-Sncro-Middleware-Version on the /enable call). Empty = unknown /
+        pre-version-reporting middleware."""
+        if key in self._sessions:
+            self._sessions[key]["middleware_version"] = version
+
+    def get_middleware_version(self, key: str) -> str:
+        return self._sessions.get(key, {}).get("middleware_version", "")
 
     def close_session(self, key: str) -> bool:
         """Mark a session as explicitly closed by Claude (Finished With Engines).

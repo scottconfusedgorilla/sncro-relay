@@ -776,8 +776,10 @@ async def check_session(key: str, secret: str) -> dict:
     info = store.get_session_info(key)
     age = int(time.time() - info["created_at"]) if info else 0
     snapshot = store.get_snapshot(key)
+    mw_version = store.get_middleware_version(key)
+    mw_warning = _middleware_version_warning(info, mw_version)
     if snapshot is None:
-        return {
+        resp = {
             "active": True,
             "status": "waiting",
             "session_age_seconds": age,
@@ -792,7 +794,12 @@ async def check_session(key: str, secret: str) -> dict:
                 "Call check_session again in a few seconds to see if they've connected."
             ),
         }
-    return {
+        if mw_version:
+            resp["middleware_version"] = mw_version
+        if mw_warning:
+            resp["middleware_warning"] = mw_warning
+        return resp
+    resp = {
         "active": True,
         "status": "connected",
         "session_age_seconds": age,
@@ -801,6 +808,45 @@ async def check_session(key: str, secret: str) -> dict:
         "snapshot_url": snapshot.get("url", ""),
         "snapshot_title": snapshot.get("title", ""),
     }
+    if mw_version:
+        resp["middleware_version"] = mw_version
+    if mw_warning:
+        resp["middleware_warning"] = mw_warning
+    return resp
+
+
+# Bump when we ship a new middleware version that customers should pick up.
+# Kept in relay so we don't have to redeploy the middleware repo to adjust it.
+CURRENT_MIDDLEWARE_VERSION = "0.9.4"
+
+
+def _middleware_version_warning(info: dict | None, reported: str) -> str:
+    """Return a Claude-facing warning if the customer's middleware looks stale.
+
+    Only fires once the session has been consumed (i.e. /enable was called —
+    before that there's no middleware version to report). Empty string means
+    the middleware predates version reporting (v0.9.3 and earlier), which
+    typically means it's also missing the Phase C confirm-click flow and the
+    Phase F CSRF / clickjacking defences.
+    """
+    if not info or not info.get("consumed"):
+        return ""
+    if not reported:
+        return (
+            f"Customer app middleware is older than sncro {CURRENT_MIDDLEWARE_VERSION} — "
+            "it didn't report a version on the enable call. This likely means it's missing "
+            "the Phase C confirm-click flow and the Phase F CSRF / clickjacking defences. "
+            "Tell the user to update: "
+            "curl -o middleware/sncro_middleware.py https://relay.sncro.net/client/fastapi "
+            "(or /client/flask), commit, and redeploy."
+        )
+    if reported != CURRENT_MIDDLEWARE_VERSION:
+        return (
+            f"Customer app is running sncro middleware {reported}; current is "
+            f"{CURRENT_MIDDLEWARE_VERSION}. Not broken, but suggest the user "
+            "re-pull for the latest security fixes."
+        )
+    return ""
 
 
 @mcp.tool()
@@ -1007,6 +1053,13 @@ async def enable_session(key: str, request: Request):
         raise HTTPException(404, "Session not found")
     if not store.consume(key):
         raise HTTPException(409, "This session key has already been used. Ask Claude to create a new session.")
+    # Record the middleware version the customer app is running. Surfaced
+    # back to Claude via check_session so we can advise the user to update
+    # when a stale copy is detected. Empty string = pre-version-reporting
+    # middleware (before sncro 0.9.4).
+    mw_version = request.headers.get("x-sncro-middleware-version", "")
+    if mw_version:
+        store.set_middleware_version(key, mw_version)
     return {"ok": True, "browser_secret": store.get_browser_secret(key)}
 
 

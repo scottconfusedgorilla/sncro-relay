@@ -17,6 +17,11 @@ import urllib.error
 
 from flask import Flask, request, make_response
 
+# Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
+# Bump this when you pull a new version from sncro-relay so the relay can
+# warn Claude (via check_session) if a customer app is running an old copy.
+SNCRO_MIDDLEWARE_VERSION = "0.9.4"
+
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
 SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
@@ -87,6 +92,15 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     def sncro_healthcheck():
         """Used by the relay to discover the canonical domain for this app."""
         return {"ok": True}
+
+    @app.route("/sncro/version")
+    def sncro_version():
+        """Report the installed sncro middleware version.
+
+        Exposed so developers and the relay can detect stale middleware copies
+        without having to read the file on disk.
+        """
+        return {"version": SNCRO_MIDDLEWARE_VERSION}
 
     @app.route("/sncro/enable")
     def sncro_enable_prompt():
@@ -224,7 +238,12 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 
         browser_secret = ""
         try:
-            req = urllib.request.Request(f"{relay}/session/{key}/enable", method="POST", data=b"")
+            req = urllib.request.Request(
+                f"{relay}/session/{key}/enable",
+                method="POST",
+                data=b"",
+                headers={"X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION},
+            )
             with urllib.request.urlopen(req, timeout=5) as r:
                 payload = json.loads(r.read().decode())
             browser_secret = payload.get("browser_secret", "")
