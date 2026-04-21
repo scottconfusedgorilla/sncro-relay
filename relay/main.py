@@ -778,22 +778,46 @@ async def check_session(key: str, secret: str) -> dict:
     snapshot = store.get_snapshot(key)
     mw_version = store.get_middleware_version(key)
     mw_warning = _middleware_version_warning(info, mw_version)
+    debug_mode = store.get_debug_mode(key)
     if snapshot is None:
-        resp = {
-            "active": True,
-            "status": "waiting",
-            "session_age_seconds": age,
-            "consumed": info.get("consumed", False) if info else False,
-            "message": (
-                f"Session created {age}s ago but the browser has NOT connected yet. "
-                "The user needs to open the enable URL in their browser. "
-                "Remind them to click/paste it. If they already did:\n"
-                "  - Make sure the app is running with DEBUG=true (sncro only loads in debug mode)\n"
-                "  - Make sure the page has finished loading\n"
-                "  - Try refreshing the page\n\n"
-                "Call check_session again in a few seconds to see if they've connected."
-            ),
-        }
+        consumed = info.get("consumed", False) if info else False
+        # If the middleware reported debug=False, we know up-front why agent.js
+        # isn't injecting — skip the generic waiting message and give Claude
+        # the specific diagnostic immediately.
+        if consumed and debug_mode is False:
+            resp = {
+                "active": True,
+                "status": "waiting",
+                "session_age_seconds": age,
+                "consumed": True,
+                "debug_mode": False,
+                "message": (
+                    "Middleware accepted /enable but the customer app reports "
+                    "debug=False — agent.js is NOT being injected. Tell the "
+                    "user to set DEBUG=true (FastAPI: FastAPI(debug=True); "
+                    "Flask: FLASK_DEBUG=1 or app.debug=True) on the running "
+                    "deployment and restart. sncro is designed to only load "
+                    "in debug mode — this is working as intended, not a bug."
+                ),
+            }
+        else:
+            resp = {
+                "active": True,
+                "status": "waiting",
+                "session_age_seconds": age,
+                "consumed": consumed,
+                "message": (
+                    f"Session created {age}s ago but the browser has NOT connected yet. "
+                    "The user needs to open the enable URL in their browser. "
+                    "Remind them to click/paste it. If they already did:\n"
+                    "  - Make sure the app is running with DEBUG=true (sncro only loads in debug mode)\n"
+                    "  - Make sure the page has finished loading\n"
+                    "  - Try refreshing the page\n\n"
+                    "Call check_session again in a few seconds to see if they've connected."
+                ),
+            }
+            if debug_mode is True:
+                resp["debug_mode"] = True
         if mw_version:
             resp["middleware_version"] = mw_version
         if mw_warning:
@@ -817,7 +841,7 @@ async def check_session(key: str, secret: str) -> dict:
 
 # Bump when we ship a new middleware version that customers should pick up.
 # Kept in relay so we don't have to redeploy the middleware repo to adjust it.
-CURRENT_MIDDLEWARE_VERSION = "0.9.4"
+CURRENT_MIDDLEWARE_VERSION = "0.9.5"
 
 
 def _middleware_version_warning(info: dict | None, reported: str) -> str:
@@ -1060,6 +1084,12 @@ async def enable_session(key: str, request: Request):
     mw_version = request.headers.get("x-sncro-middleware-version", "")
     if mw_version:
         store.set_middleware_version(key, mw_version)
+    # X-Sncro-Debug reports the customer app's debug state. Stored so
+    # check_session can tell Claude when a "waiting" session is stuck because
+    # the app was deployed with debug off. Absent header = pre-0.9.5 middleware.
+    debug_header = request.headers.get("x-sncro-debug", "").strip().lower()
+    if debug_header in ("true", "false"):
+        store.set_debug_mode(key, debug_header == "true")
     return {"ok": True, "browser_secret": store.get_browser_secret(key)}
 
 

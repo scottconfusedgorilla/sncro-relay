@@ -25,6 +25,7 @@ class SessionStore:
             "consumed": False,
             "closed_explicitly": False,
             "middleware_version": "",
+            "debug_mode": None,
             "tools_used": set(),
             "requests": deque(),
             "responses": {},
@@ -39,6 +40,17 @@ class SessionStore:
 
     def get_middleware_version(self, key: str) -> str:
         return self._sessions.get(key, {}).get("middleware_version", "")
+
+    def set_debug_mode(self, key: str, debug: bool) -> None:
+        """Record the customer-app debug state (reported via X-Sncro-Debug on
+        the /enable call). None = unknown / pre-0.9.5 middleware that didn't
+        send the header."""
+        if key in self._sessions:
+            self._sessions[key]["debug_mode"] = debug
+
+    def get_debug_mode(self, key: str):
+        """Returns True, False, or None (unknown)."""
+        return self._sessions.get(key, {}).get("debug_mode", None)
 
     def close_session(self, key: str) -> bool:
         """Mark a session as explicitly closed by Claude (Finished With Engines).

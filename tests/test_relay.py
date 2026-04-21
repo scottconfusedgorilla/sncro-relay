@@ -182,6 +182,71 @@ class TestEnableEndpoint:
         assert resp.status_code == 200
         assert store.get_middleware_version(KEY) == ""
 
+    def test_enable_records_debug_true(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable", headers={"X-Sncro-Debug": "true"})
+        assert resp.status_code == 200
+        assert store.get_debug_mode(KEY) is True
+
+    def test_enable_records_debug_false(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable", headers={"X-Sncro-Debug": "false"})
+        assert resp.status_code == 200
+        assert store.get_debug_mode(KEY) is False
+
+    def test_enable_without_debug_header_leaves_debug_none(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable")
+        assert resp.status_code == 200
+        assert store.get_debug_mode(KEY) is None
+
+
+# --- check_session DEBUG diagnostic ---
+
+class TestDebugDiagnostic:
+    """check_session should surface a specific message when the customer app
+    reports debug=False — we know up-front that agent.js won't inject."""
+
+    SECRET = "a" * 32
+
+    def _consume(self, debug_header: str | None = None):
+        store.ensure_session(KEY, secret=self.SECRET, browser_secret=BROWSER_SECRET)
+        headers = {}
+        if debug_header is not None:
+            headers["X-Sncro-Debug"] = debug_header
+        resp = client.post(f"/session/{KEY}/enable", headers=headers)
+        assert resp.status_code == 200
+
+    def _call_check(self) -> dict:
+        import asyncio
+        from relay.main import check_session as _check
+        # check_session is registered with @mcp.tool(), so _check is a FunctionTool,
+        # not a plain coroutine. Grab the underlying function instead.
+        fn = getattr(_check, "fn", _check)
+        return asyncio.run(fn(KEY, self.SECRET))
+
+    def test_debug_false_produces_targeted_message(self):
+        self._consume("false")
+        info = self._call_check()
+        assert info["status"] == "waiting"
+        assert info["debug_mode"] is False
+        assert "debug=False" in info["message"]
+        assert "DEBUG=true" in info["message"]
+
+    def test_debug_true_does_not_trigger_targeted_message(self):
+        self._consume("true")
+        info = self._call_check()
+        assert info["status"] == "waiting"
+        assert info["debug_mode"] is True
+        assert "debug=False" not in info["message"]
+
+    def test_debug_unknown_does_not_surface_debug_field(self):
+        """Pre-0.9.5 middleware: no X-Sncro-Debug header, no debug_mode in response."""
+        self._consume(None)
+        info = self._call_check()
+        assert info["status"] == "waiting"
+        assert "debug_mode" not in info
+
 
 # --- Contract tests (endpoint shapes) ---
 

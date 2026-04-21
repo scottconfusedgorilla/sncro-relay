@@ -23,7 +23,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
 # Bump this when you pull a new version from sncro-relay so the relay can
 # warn Claude (via check_session) if a customer app is running an old copy.
-SNCRO_MIDDLEWARE_VERSION = "0.9.4"
+SNCRO_MIDDLEWARE_VERSION = "0.9.5"
 
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
@@ -308,13 +308,23 @@ async def sncro_enable(key: str, request: Request):
                            "Codes are 9 digits (e.g. 787-221-713).<br>Ask Claude for a new code.")
 
     relay_url = getattr(request.app, '_sncro_relay_url', 'https://relay.sncro.net')
+    # Report app.debug so the relay can warn Claude if debug is off — in that
+    # case the customer app has explicitly loaded sncro routes but the typical
+    # install pattern gates them on app.debug, so a stale debug=False deploy
+    # would never load sncro at all. We still report it because a customer
+    # may have hand-wired things differently, and Claude needs to see the
+    # mismatch rather than silently waiting for snapshots that never come.
+    debug_flag = "true" if getattr(request.app, "debug", False) else "false"
     browser_secret = ""
     try:
         req = urllib.request.Request(
             f"{relay_url}/session/{key}/enable",
             method="POST",
             data=b"",
-            headers={"X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION},
+            headers={
+                "X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION,
+                "X-Sncro-Debug": debug_flag,
+            },
         )
         with urllib.request.urlopen(req, timeout=5) as r:
             payload = json.loads(r.read().decode())

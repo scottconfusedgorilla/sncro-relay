@@ -20,7 +20,7 @@ from flask import Flask, request, make_response
 # Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
 # Bump this when you pull a new version from sncro-relay so the relay can
 # warn Claude (via check_session) if a customer app is running an old copy.
-SNCRO_MIDDLEWARE_VERSION = "0.9.4"
+SNCRO_MIDDLEWARE_VERSION = "0.9.5"
 
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
@@ -236,13 +236,19 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
             return _error_page("invalid key", "Invalid session code",
                                "Codes are 9 digits (e.g. 787-221-713).<br>Ask Claude for a new code.")
 
+        # Report app.debug so the relay can warn Claude if debug is off — see
+        # the equivalent note in sncro_middleware.py for why.
+        debug_flag = "true" if app.debug else "false"
         browser_secret = ""
         try:
             req = urllib.request.Request(
                 f"{relay}/session/{key}/enable",
                 method="POST",
                 data=b"",
-                headers={"X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION},
+                headers={
+                    "X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION,
+                    "X-Sncro-Debug": debug_flag,
+                },
             )
             with urllib.request.urlopen(req, timeout=5) as r:
                 payload = json.loads(r.read().decode())
