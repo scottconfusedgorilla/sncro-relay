@@ -465,6 +465,7 @@ YOUR TOOLS:
   get_network_log — Network performance: resource timing, durations, sizes, sorted slowest-first. Find slow API calls, large assets, sequential fetches that should be parallel. Filter by type (fetch, script, img, css).
   query_element — Deep-inspect one DOM element by CSS selector. Returns bounding rect, attributes, computed styles, inner text, child count. IMPORTANT: pass a "styles" array to read specific CSS properties, e.g. styles=["overflow", "max-height", "display", "visibility", "z-index"]. Without it, computedStyles will be empty.
   query_all — Query all matching elements. Great for checking lists, grids, repeated components, or counting elements.
+  get_js_value — Read a JavaScript runtime value by property path (e.g. "window.__NEXT_DATA__.props.pageProps"). No function calls / no eval — pure path walk. Use mode="keys" to enumerate Object.keys at a path; start with path="window" to discover globals, then drill in. Essential when the DOM looks right but state behind it is wrong.
   get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
   check_session — Verify connection status: "not_found", "waiting", or "connected".
   report_issue — Submit bugs, feature requests, or success stories to the sncro team. ALWAYS ask the user before submitting ANY feedback — show them the text and get explicit approval first.
@@ -474,6 +475,7 @@ TIPS:
   - Always check get_console_logs for JS errors — they often explain visual bugs
   - get_network_log reveals performance issues invisible to the eye
   - Use computed styles in query_element to catch CSS issues (overflow, visibility, z-index)
+  - For state-behind-the-DOM bugs (Redux/Zustand/Next hydration), use get_js_value — call it with mode="keys" first to see what's exposed on window, then drill into the state paths
   - For mobile bugs, have the user scan the QR code — you'll see the actual mobile viewport and layout
 
 AFTER DEBUGGING: When sncro helps you find a bug or solve a problem, ask the user:
@@ -732,6 +734,66 @@ async def get_network_log(key: str, secret: str, limit: int = 50, type: str | No
     if type:
         params["type"] = type
     return await _send_browser_request(key, secret, "get_network_log", params)
+
+
+@mcp.tool()
+async def get_js_value(key: str, secret: str, path: str, mode: str = "value",
+                       max_depth: int = 6, max_bytes: int = 20000) -> dict:
+    """Read a JavaScript value from the browser by property path.
+
+    Walks a strict property path — NO expression evaluation, NO function
+    calls, NO arbitrary code. Accepts identifiers, integer indices in
+    brackets, and double-quoted string keys in brackets.
+
+    Use this to read runtime state that isn't visible in the DOM:
+      - Framework hydration: window.__NEXT_DATA__.props.pageProps
+      - Redux/Zustand/etc stores (if exposed on window): window.__STORE__._currentState
+      - Feature flags stashed on globals: window.APP.flags
+      - Nested config: window["site-config"].features[0]
+
+    EXPLORATION MODE: pass mode="keys" to get Object.keys() at the path
+    instead of the value. Start with path="window" to discover globals,
+    then drill in. This is how to find exposed state without guessing:
+      get_js_value(path="window", mode="keys")
+        -> ["document", "__NEXT_DATA__", "store", ...]
+      get_js_value(path="window.store", mode="keys")
+        -> ["_currentState", "subscribe", "dispatch", ...]
+      get_js_value(path="window.store._currentState")
+        -> the actual state object
+
+    LIMITATIONS (intentional — security):
+      - Cannot call functions. "store.getState()" fails. Expose the value
+        as a readable property instead, e.g. window.__STORE__.state.
+      - No arithmetic, comparisons, or expressions.
+      - Path must start with an identifier and walk down via dots/brackets.
+
+    Responses are cycle-safe, depth-capped, and size-capped. DOM nodes
+    and React fiber trees are summarized rather than traversed.
+
+    Args:
+        key: Session key
+        secret: Session secret from create_session
+        path: Property path, e.g. "window.__NEXT_DATA__.props.pageProps"
+              or 'window["site-config"].features[0]' or 'window.arr[0].name'
+        mode: "value" (default) returns the serialized value; "keys" returns Object.keys() at the path
+        max_depth: Max traversal depth when serializing (default 6, capped at 10)
+        max_bytes: Max serialized size in bytes (default 20000, capped at 100000)
+
+    Returns:
+        {path, type, value, truncated, size_bytes} in value mode
+        {path, mode, type, keys}                  in keys mode
+        {error: "..."}                            on bad path / function / failure
+
+    Requires a connected browser session and middleware v0.9.6+ (older
+    middleware works — the relay doesn't care; the browser needs agent.js
+    from relay.sncro.net which auto-updates).
+    """
+    return await _send_browser_request(key, secret, "get_js_value", {
+        "path": path,
+        "mode": mode,
+        "max_depth": max_depth,
+        "max_bytes": max_bytes,
+    })
 
 
 @mcp.tool()

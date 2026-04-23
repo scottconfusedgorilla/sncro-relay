@@ -207,6 +207,111 @@
       return result;
     },
 
+    get_js_value(params) {
+      // Walks a strict property path (no expression evaluation). Accepts
+      // identifiers, integer indices in brackets, and double-quoted string
+      // keys in brackets. Refuses to traverse functions — the point of the
+      // tokenizer is that "store.getState()" can't be made to run; if the
+      // path ends at a function the caller has to rethink their approach.
+      const path = String(params?.path || "");
+      const mode = params?.mode === "keys" ? "keys" : "value";
+      const maxDepth = Math.min(Number(params?.max_depth) || 6, 10);
+      const maxBytes = Math.min(Number(params?.max_bytes) || 20000, 100000);
+
+      if (!path) return { error: "path is required" };
+
+      // Tokenize: a.b[0]["c"] -> ["a","b",0,"c"]. No function calls, no
+      // operators, no assignment, no comma.
+      const tokens = [];
+      const re = /^([A-Za-z_$][A-Za-z0-9_$]*)|\[(\d+)\]|\["((?:[^"\\]|\\.)*)"\]|\.([A-Za-z_$][A-Za-z0-9_$]*)/;
+      let rest = path;
+      while (rest.length > 0) {
+        const m = rest.match(re);
+        if (!m) return { error: `Invalid path near: ${rest.slice(0, 20)}` };
+        if (m[1] !== undefined) tokens.push(m[1]);
+        else if (m[2] !== undefined) tokens.push(Number(m[2]));
+        else if (m[3] !== undefined) tokens.push(m[3].replace(/\\(.)/g, "$1"));
+        else if (m[4] !== undefined) tokens.push(m[4]);
+        rest = rest.slice(m[0].length);
+      }
+      if (tokens.length === 0) return { error: "empty path" };
+
+      let cur = window;
+      for (let i = 0; i < tokens.length; i++) {
+        if (cur == null) return { error: `Null/undefined at "${tokens.slice(0, i).join(".")}"`, value: null };
+        cur = cur[tokens[i]];
+      }
+
+      if (typeof cur === "function") {
+        return { error: "Path ends at a function — call-paths are not supported. Expose the value as a readable property." };
+      }
+
+      if (mode === "keys") {
+        if (cur === null || cur === undefined) {
+          return { path: path, mode: "keys", type: String(cur), keys: [] };
+        }
+        let keys;
+        try {
+          if (Array.isArray(cur)) {
+            keys = [`length=${cur.length}`];
+          } else if (typeof cur === "object") {
+            keys = Object.keys(cur).slice(0, 500);
+          } else {
+            return { path: path, mode: "keys", type: typeof cur, keys: [], note: "primitive — no keys" };
+          }
+        } catch (e) {
+          return { error: `Could not enumerate keys at ${path}: ${e.message}` };
+        }
+        return { path: path, mode: "keys", type: Array.isArray(cur) ? "array" : typeof cur, keys: keys };
+      }
+
+      // Safe stringify — break cycles and cap depth, cap total size.
+      const seen = new WeakSet();
+      function limited(v, depth) {
+        if (v === null || v === undefined) return v;
+        const t = typeof v;
+        if (t === "string") return v.length > 2000 ? v.slice(0, 2000) + "..." : v;
+        if (t === "number" || t === "boolean") return v;
+        if (t === "function") return "[function]";
+        if (t === "symbol") return String(v);
+        if (t === "bigint") return `${v}n`;
+        if (depth >= maxDepth) return "[truncated:depth]";
+        if (seen.has(v)) return "[circular]";
+        seen.add(v);
+        if (Array.isArray(v)) {
+          return v.slice(0, 100).map((x) => limited(x, depth + 1));
+        }
+        // DOM nodes / non-plain objects: don't recurse, give a useful summary.
+        if (v instanceof Node) {
+          return `[${v.nodeName}${v.id ? "#" + v.id : ""}]`;
+        }
+        const out = {};
+        let n = 0;
+        for (const k of Object.keys(v)) {
+          if (n++ > 100) { out["..."] = "[truncated:keys]"; break; }
+          out[k] = limited(v[k], depth + 1);
+        }
+        return out;
+      }
+
+      const reduced = limited(cur, 0);
+      let serialized;
+      try {
+        serialized = JSON.stringify(reduced);
+      } catch (e) {
+        return { error: `Could not serialize value at ${path}: ${e.message}` };
+      }
+
+      const truncated = serialized.length > maxBytes;
+      return {
+        path: path,
+        type: Array.isArray(cur) ? "array" : typeof cur,
+        value: reduced,
+        truncated: truncated,
+        size_bytes: serialized.length,
+      };
+    },
+
     get_page_snapshot() {
       return {
         url: location.href,
