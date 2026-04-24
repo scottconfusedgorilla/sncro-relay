@@ -406,7 +406,7 @@ async def create_session(project_key: str, git_user: str = "", brief: bool = Fal
         except Exception:
             pass  # Don't block session creation if logging fails
 
-    store.ensure_session(session_key, secret=session_secret, browser_secret=browser_secret, db_id=db_id)
+    store.ensure_session(session_key, secret=session_secret, browser_secret=browser_secret, db_id=db_id, project_key=project_key)
 
     # Build the full enable URL — resolve the actual canonical domain
     raw_domain = project["domain"] if sb and project else None
@@ -469,6 +469,7 @@ YOUR TOOLS:
   get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
   check_session — Verify connection status: "not_found", "waiting", or "connected".
   report_issue — Submit bugs, feature requests, or success stories to the sncro team. ALWAYS ask the user before submitting ANY feedback — show them the text and get explicit approval first.
+  get_feedback — Read incoming feedback for this session's project (bugs, feature requests, success stories). Scoped to the project the session was created for; cannot cross projects. Use when the user asks "what feedback have we got?"
 
 TIPS:
   - get_page_snapshot first to orient, then drill down with query_element
@@ -965,6 +966,68 @@ async def end_session(key: str, secret: str) -> dict:
             "Session closed. Do not call any other sncro tools on this key. "
             "If a later turn needs browser visibility, ask the user about starting a new session."
         ),
+    }
+
+
+@mcp.tool()
+async def get_feedback(key: str, secret: str, category: str = "", limit: int = 20) -> dict:
+    """Read incoming feedback for THIS session's project.
+
+    Returns bug reports, feature requests, usability notes, and success
+    stories that other Claude sessions (or the project owner) have
+    submitted via report_issue, filtered to this session's project. Lets
+    Claude review what's coming in without needing the admin dashboard.
+
+    Scope is strictly "this session's project" — determined by the
+    project_key used at create_session time and stored in the session.
+    You cannot read another project's feedback with this tool.
+
+    Args:
+        key: Session key
+        secret: Session secret from create_session
+        category: Optional filter — "bug", "feature_request", "usability",
+                  "documentation", or "success_story". Empty = all categories.
+        limit: Max rows to return (default 20, capped at 100).
+
+    Returns:
+        {project_key, count, feedback: [{id, category, description,
+         git_user, created_at, shipped_in_build, published}, ...]}
+        or {error: "..."} on bad auth / missing project.
+    """
+    err = _check_secret(key, secret)
+    if err:
+        return err
+
+    project_key = store.get_project_key(key)
+    if not project_key:
+        return {"error": "Session is not bound to a project (pre-0.9.6 session?). Create a new session."}
+
+    sb = _get_supabase()
+    if sb is None:
+        return {"error": "Supabase client unavailable — feedback cannot be read without it."}
+
+    valid_categories = {"bug", "feature_request", "usability", "documentation", "success_story"}
+    if category and category not in valid_categories:
+        return {"error": f"Category must be one of: {', '.join(sorted(valid_categories))} (or empty for all)."}
+
+    capped_limit = max(1, min(int(limit or 20), 100))
+
+    try:
+        q = sb.table("feedback").select(
+            "id, category, description, git_user, created_at, shipped_in_build, published"
+        ).eq("project_key", project_key).order("created_at", desc=True).limit(capped_limit)
+        if category:
+            q = q.eq("category", category)
+        resp = q.execute()
+    except Exception as e:
+        return {"error": f"Feedback query failed: {e}"}
+
+    rows = resp.data or []
+    return {
+        "project_key": project_key,
+        "count": len(rows),
+        "category_filter": category or None,
+        "feedback": rows,
     }
 
 

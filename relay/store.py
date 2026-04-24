@@ -13,13 +13,14 @@ class SessionStore:
         self.expiry_seconds = expiry_minutes * 60
         self._sessions: dict[str, dict] = {}
 
-    def _new_session(self, secret: str = "", browser_secret: str = "", db_id: str = "") -> dict:
+    def _new_session(self, secret: str = "", browser_secret: str = "", db_id: str = "", project_key: str = "") -> dict:
         return {
             "created_at": time.time(),
             "last_seen": time.time(),
             "secret": secret,
             "browser_secret": browser_secret,
             "db_id": db_id,
+            "project_key": project_key,
             "snapshot": None,
             "connected": False,
             "consumed": False,
@@ -65,9 +66,9 @@ class SessionStore:
     def is_closed(self, key: str) -> bool:
         return self._sessions.get(key, {}).get("closed_explicitly", False)
 
-    def ensure_session(self, key: str, secret: str = "", browser_secret: str = "", db_id: str = "") -> None:
+    def ensure_session(self, key: str, secret: str = "", browser_secret: str = "", db_id: str = "", project_key: str = "") -> None:
         if key not in self._sessions:
-            self._sessions[key] = self._new_session(secret=secret, browser_secret=browser_secret, db_id=db_id)
+            self._sessions[key] = self._new_session(secret=secret, browser_secret=browser_secret, db_id=db_id, project_key=project_key)
         self._sessions[key]["last_seen"] = time.time()
 
     def touch(self, key: str) -> bool:
@@ -82,6 +83,9 @@ class SessionStore:
 
     def get_db_id(self, key: str) -> str:
         return self._sessions.get(key, {}).get("db_id", "")
+
+    def get_project_key(self, key: str) -> str:
+        return self._sessions.get(key, {}).get("project_key", "")
 
     def record_tool(self, key: str, tool_name: str) -> None:
         if key in self._sessions:
