@@ -512,14 +512,38 @@
 
   async function startCapture() {
     if (captureStream) return;
-    const opts = { video: { frameRate: { ideal: 2 } }, audio: false };
-    opts.preferCurrentTab = true; // Chrome/Edge: pre-selects this tab; ignored elsewhere
+    // Scope the capture to THIS tab so the screenshot shows the app — not the
+    // user's other tabs, bookmarks bar, toolbar, or desktop. On Chromium,
+    // preferCurrentTab locks the picker to the current tab (the frame is then
+    // just page content, no browser chrome). displaySurface + monitorTypeSurfaces
+    // nudge other browsers toward a tab and drop the whole-screen option; they
+    // can't fully force it, so the worst case there is a window, never the desktop.
+    const scoped = {
+      video: { displaySurface: "browser", frameRate: { ideal: 2 } },
+      audio: false,
+      preferCurrentTab: true,
+      monitorTypeSurfaces: "exclude",
+    };
+    const basic = { video: { frameRate: { ideal: 2 } }, audio: false };
     try {
-      captureStream = await navigator.mediaDevices.getDisplayMedia(opts);
-    } catch (_) {
-      captureStream = null; // user cancelled the picker or capture unsupported
-      updateShareUI();
-      return;
+      captureStream = await navigator.mediaDevices.getDisplayMedia(scoped);
+    } catch (e) {
+      // A browser may reject the richer constraint combo with TypeError — retry
+      // with plain constraints. Any other error (user cancelled, unsupported)
+      // means no capture.
+      if (e && e.name === "TypeError") {
+        try {
+          captureStream = await navigator.mediaDevices.getDisplayMedia(basic);
+        } catch (_) {
+          captureStream = null;
+          updateShareUI();
+          return;
+        }
+      } else {
+        captureStream = null; // user cancelled the picker or capture unsupported
+        updateShareUI();
+        return;
+      }
     }
     captureVideo = document.createElement("video");
     captureVideo.muted = true;
