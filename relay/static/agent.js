@@ -90,9 +90,9 @@
   // --- Snapshot (baseline push) ---
 
   async function pushSnapshot() {
-    if (!isPrimary) return; // only the primary window owns the relay's snapshot
+    if (!isPrimary || sessionEnded) return; // only the primary window owns the relay's snapshot
     try {
-      await fetch(`${RELAY}/session/${KEY}/snapshot`, {
+      const resp = await fetch(`${RELAY}/session/${KEY}/snapshot`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
@@ -103,6 +103,7 @@
           timestamp: Date.now(),
         }),
       });
+      if (resp.status === 410 || resp.status === 404) endSession();
     } catch (_) {
       // Silent fail — don't pollute the console we're capturing
     }
@@ -421,6 +422,8 @@
   let shareEl = null;
   let captureStream = null;
   let captureVideo = null;
+  let sessionEnded = false; // set when the relay reports the session is gone (410/404)
+  let snapshotTimer = null;
 
   function setPrimary(p) {
     if (isPrimary === p) return;
@@ -545,12 +548,36 @@
   function updateShareUI() {
     if (!shareEl) return;
     const sharing = !!captureStream;
-    shareEl.hidden = !(SCREENSHOTS && !sharing);
+    shareEl.hidden = sessionEnded || !(SCREENSHOTS && !sharing);
     if (badgeEl) {
       badgeEl.title = sharing
         ? "sncro is instrumenting this window — screen sharing active"
         : "sncro is instrumenting this window";
     }
+  }
+
+  // Called when the relay reports the session is gone (410 closed / 404 evicted).
+  // Without this the agent would poll a dead key forever with the badge still
+  // green, and the stale cookie would re-bind the next page load to the corpse.
+  function endSession() {
+    if (sessionEnded) return;
+    sessionEnded = true;
+    isPrimary = false;
+    stopCapture();
+    if (snapshotTimer) clearInterval(snapshotTimer);
+    // Drop our stale cookies so a reload doesn't rebind to the dead session.
+    const kill = "=; Max-Age=0; path=/; Secure; SameSite=Strict";
+    document.cookie = "sncro_key" + kill;
+    document.cookie = "sncro_browser_secret" + kill;
+    document.cookie = "sncro_screenshots" + kill;
+    if (badgeEl) {
+      badgeEl.classList.remove("primary");
+      badgeEl.classList.add("ended");
+      if (stateEl) stateEl.textContent = "ended";
+      if (shareEl) shareEl.hidden = true;
+      badgeEl.title = "sncro session ended — reload the page to start a new one";
+    }
+    console.info("[sncro] Session ended by the relay — agent stopped polling.");
   }
 
   // --- Status badge ---
@@ -576,6 +603,8 @@
       '.badge.primary{opacity:1;}' +
       '.dot{width:7px;height:7px;border-radius:50%;background:#6b6b6b;flex:none;}' +
       '.badge.primary .dot{background:#3ddc84;}' +
+      '.badge.ended{opacity:.6;}' +
+      '.badge.ended .dot{background:#ff6b61;}' +
       '.state{color:#9a9a9a;font-weight:500;}' +
       '.badge.primary .state{color:#3ddc84;}' +
       '@keyframes sncro-pulse{0%{transform:scale(1);}50%{transform:scale(2.1);opacity:.35;}100%{transform:scale(1);opacity:1;}}' +
@@ -630,6 +659,10 @@
         `${RELAY}/session/${KEY}/request/pending?timeout=15`,
         { headers: authHeaders() }
       );
+      if (resp.status === 410 || resp.status === 404) {
+        endSession();
+        return;
+      }
       const data = await resp.json();
 
       if (data.pending === false || !data.request_id) {
@@ -661,11 +694,12 @@
   initElection();
 
   // Baseline snapshots on interval (pushSnapshot no-ops unless we're primary)
-  setInterval(pushSnapshot, SNAPSHOT_INTERVAL);
+  snapshotTimer = setInterval(pushSnapshot, SNAPSHOT_INTERVAL);
 
-  // Poll for on-demand requests — only the primary window serves.
+  // Poll for on-demand requests — only the primary window serves. Stops for
+  // good once the relay reports the session is gone (endSession sets the flag).
   (async function pollLoop() {
-    while (true) {
+    while (!sessionEnded) {
       if (isPrimary) {
         await pollForRequests();
         await new Promise((r) => setTimeout(r, POLL_INTERVAL));
