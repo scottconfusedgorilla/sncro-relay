@@ -87,6 +87,7 @@
   // --- Snapshot (baseline push) ---
 
   async function pushSnapshot() {
+    if (!isPrimary) return; // only the primary window owns the relay's snapshot
     try {
       await fetch(`${RELAY}/session/${KEY}/snapshot`, {
         method: "POST",
@@ -350,6 +351,170 @@
     }
   }
 
+  // --- Multi-window coordination ---
+  //
+  // Every same-origin window/tab runs this agent and shares the relay session
+  // (the key+secret live in origin-scoped cookies). Without coordination they
+  // all long-poll and the relay hands each request to whichever wins the race,
+  // so the user can't tell which window Claude is actually talking to.
+  //
+  // Election rule: the primary is the window with the highest "claim" value,
+  // tie-broken by window id. A claim is a timestamp stamped on load and on
+  // focus, so the most-recently-focused window wins — and stays primary after
+  // the browser is blurred (e.g. while the user is back in their IDE), because
+  // blur never re-stamps. Only the primary polls, serves, and pushes snapshots.
+  // Elections are fully distributed: every window sees the same votes on the
+  // channel and tallies independently, so they converge without a leader.
+
+  const WIN_ID = Math.random().toString(36).slice(2, 10);
+  const ELECTION_MS = 250;
+  let isPrimary = false;
+  let myClaim = Date.now();
+  let channel = null;
+  let votes = [];
+  let collecting = false;
+  let electionTimer = null;
+  let stateEl = null;
+  let dotEl = null;
+  let badgeEl = null;
+
+  function setPrimary(p) {
+    if (isPrimary === p) return;
+    isPrimary = p;
+    if (badgeEl) {
+      badgeEl.classList.toggle("primary", p);
+      stateEl.textContent = p ? "active" : "standby";
+    }
+    if (p) pushSnapshot(); // refresh the relay's snapshot the moment we take over
+  }
+
+  function castVote() {
+    votes.push({ id: WIN_ID, claim: myClaim });
+    try {
+      channel.postMessage({ type: "vote", id: WIN_ID, claim: myClaim });
+    } catch (_) {}
+  }
+
+  function beginElection(initiate) {
+    if (!channel) return;
+    votes = [];
+    collecting = true;
+    if (initiate) {
+      try {
+        channel.postMessage({ type: "election", id: WIN_ID });
+      } catch (_) {}
+    }
+    castVote();
+    clearTimeout(electionTimer);
+    electionTimer = setTimeout(tally, ELECTION_MS);
+  }
+
+  function tally() {
+    collecting = false;
+    let best = votes[0] || { id: WIN_ID, claim: myClaim };
+    for (const v of votes) {
+      if (v.claim > best.claim || (v.claim === best.claim && v.id > best.id)) best = v;
+    }
+    setPrimary(best.id === WIN_ID);
+  }
+
+  function onChannelMessage(e) {
+    const m = e.data || {};
+    if (m.type === "vote") {
+      if (collecting) votes.push({ id: m.id, claim: m.claim });
+    } else if (m.type === "election") {
+      if (collecting) castVote();
+      else beginElection(false);
+    } else if (m.type === "bye") {
+      // A window (possibly the primary) left — hold a fresh election.
+      beginElection(true);
+    }
+  }
+
+  function initElection() {
+    try {
+      channel = new BroadcastChannel("sncro-primary:" + KEY);
+    } catch (_) {
+      channel = null;
+    }
+    if (!channel) {
+      // No BroadcastChannel support — assume we're the only window.
+      setPrimary(true);
+      return;
+    }
+    channel.onmessage = onChannelMessage;
+    window.addEventListener("focus", () => {
+      myClaim = Date.now();
+      beginElection(true);
+    });
+    window.addEventListener("pagehide", () => {
+      try {
+        channel.postMessage({ type: "bye", id: WIN_ID });
+      } catch (_) {}
+    });
+    beginElection(true);
+  }
+
+  // --- Status badge ---
+  //
+  // A small corner pill so every instrumented window is visibly identifiable
+  // and you can see at a glance which one Claude is bound to (active vs
+  // standby), with a pulse when it serves a request. Rendered in a shadow root
+  // so the host page's CSS can't touch it and vice versa.
+
+  function createBadge() {
+    if (badgeEl) return;
+    const host = document.createElement("div");
+    host.id = "sncro-badge-host";
+    host.style.cssText =
+      "position:fixed;bottom:12px;right:12px;z-index:2147483647;pointer-events:none;";
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML =
+      '<style>' +
+      '.badge{display:flex;align-items:center;gap:6px;' +
+      'font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;' +
+      'color:#e8e8e8;background:#1a1a1a;border:1px solid #333;border-radius:9999px;' +
+      'padding:5px 9px;box-shadow:0 1px 3px rgba(0,0,0,.4);opacity:.55;transition:opacity .2s;}' +
+      '.badge.primary{opacity:1;}' +
+      '.dot{width:7px;height:7px;border-radius:50%;background:#6b6b6b;flex:none;}' +
+      '.badge.primary .dot{background:#3ddc84;}' +
+      '.state{color:#9a9a9a;font-weight:500;}' +
+      '.badge.primary .state{color:#3ddc84;}' +
+      '@keyframes sncro-pulse{0%{transform:scale(1);}50%{transform:scale(2.1);opacity:.35;}100%{transform:scale(1);opacity:1;}}' +
+      '.dot.serving{animation:sncro-pulse .5s ease-out;}' +
+      '@media (prefers-reduced-motion: reduce){' +
+      '.dot.serving{animation:none;}' +
+      '.badge.flash{outline:2px solid #3ddc84;outline-offset:1px;}}' +
+      '</style>' +
+      '<div class="badge" role="status" aria-label="sncro live debugging indicator" title="sncro is instrumenting this window">' +
+      '<span class="dot"></span><span class="label">sncro</span><span class="state">standby</span>' +
+      '</div>';
+    (document.body || document.documentElement).appendChild(host);
+    badgeEl = shadow.querySelector(".badge");
+    dotEl = shadow.querySelector(".dot");
+    stateEl = shadow.querySelector(".state");
+    if (isPrimary) {
+      badgeEl.classList.add("primary");
+      stateEl.textContent = "active";
+    }
+  }
+
+  function initBadge() {
+    if (document.body) createBadge();
+    else document.addEventListener("DOMContentLoaded", createBadge, { once: true });
+  }
+
+  function flashServing() {
+    if (!dotEl) return;
+    dotEl.classList.remove("serving");
+    void dotEl.offsetWidth; // force reflow so the animation restarts each time
+    dotEl.classList.add("serving");
+    badgeEl.classList.add("flash"); // reduced-motion fallback (CSS-gated)
+    setTimeout(() => {
+      if (badgeEl) badgeEl.classList.remove("flash");
+    }, 500);
+  }
+
   // --- Poll for requests ---
 
   async function pollForRequests() {
@@ -364,6 +529,7 @@
         return;
       }
 
+      flashServing();
       const result = handleRequest(data);
 
       await fetch(`${RELAY}/session/${KEY}/response`, {
@@ -384,16 +550,21 @@
 
   captureConsole();
   captureErrors();
+  initBadge();
+  initElection();
 
-  // Baseline snapshots on interval
+  // Baseline snapshots on interval (pushSnapshot no-ops unless we're primary)
   setInterval(pushSnapshot, SNAPSHOT_INTERVAL);
-  pushSnapshot();
 
-  // Poll for on-demand requests
+  // Poll for on-demand requests — only the primary window serves.
   (async function pollLoop() {
     while (true) {
-      await pollForRequests();
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      if (isPrimary) {
+        await pollForRequests();
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      } else {
+        await new Promise((r) => setTimeout(r, 500));
+      }
     }
   })();
 
