@@ -60,6 +60,11 @@ class TestEnableConfirmPage:
         assert resp.headers.get("X-Frame-Options") == "DENY"
         assert "frame-ancestors 'none'" in resp.headers.get("Content-Security-Policy", "")
 
+    def test_confirm_page_offers_screenshots_checkbox(self):
+        resp = client.get(f"/sncro/enable/{KEY}")
+        assert 'name="screenshots"' in resp.text
+        assert "Also allow screenshots" in resp.text
+
     def test_confirm_post_rejects_cross_site(self):
         # Simulate a cross-site auto-submit attack (NEW-1). Flag it via
         # Sec-Fetch-Site=cross-site; the handler must refuse.

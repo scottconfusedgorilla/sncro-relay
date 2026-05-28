@@ -15,6 +15,7 @@ import json
 import re
 import urllib.request
 import urllib.error
+import urllib.parse
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -23,11 +24,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
 # Bump this when you pull a new version from sncro-relay so the relay can
 # warn Claude (via check_session) if a customer app is running an old copy.
-SNCRO_MIDDLEWARE_VERSION = "0.9.5"
+SNCRO_MIDDLEWARE_VERSION = "0.9.6"
 
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
 SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
+SNCRO_SCREENSHOTS_COOKIE = "sncro_screenshots"
 KEY_RE = re.compile(r"^\d{9}$")
 SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -260,6 +262,10 @@ async def sncro_enable_confirm_page(key: str, request: Request):
   .btn-deny {{ background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }}
   .btn-deny:hover {{ background: #e5e7eb; }}
   .meta {{ color: #6b7280; font-size: 0.85em; text-align: center; margin-top: 16px; line-height: 1.6; }}
+  .opt {{ display: flex; gap: 10px; align-items: flex-start; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; margin: 16px 0; text-align: left; }}
+  .opt input {{ width: 18px; height: 18px; margin-top: 2px; flex: none; cursor: pointer; }}
+  .opt label {{ font-size: 0.9em; color: #374151; line-height: 1.5; cursor: pointer; }}
+  .opt label strong {{ color: #111; }}
 </style></head>
 <body>
   <h2>Allow sncro debugging?</h2>
@@ -275,9 +281,17 @@ async def sncro_enable_confirm_page(key: str, request: Request):
     your console errors, and your network activity for the next 30 minutes.
   </div>
 
-  <form method="POST" action="/sncro/enable/{safe_key}/confirm" class="row">
-    <button type="submit" class="btn btn-allow">Allow</button>
-    <button type="button" class="btn btn-deny" onclick="history.back()">Cancel</button>
+  <form method="POST" action="/sncro/enable/{safe_key}/confirm">
+    <div class="opt">
+      <input type="checkbox" id="screenshots" name="screenshots" value="on">
+      <label for="screenshots"><strong>Also allow screenshots.</strong> Lets the AI capture pixel-accurate
+      images of this tab (for design and visual checks). Your browser will ask you to pick a tab to
+      share, and shows a "sharing" indicator the whole time — stop it anytime.</label>
+    </div>
+    <div class="row">
+      <button type="submit" class="btn btn-allow">Allow</button>
+      <button type="button" class="btn btn-deny" onclick="history.back()">Cancel</button>
+    </div>
   </form>
 
   <p class="meta">If you didn't expect this, just close the tab. Nothing is enabled until you click Allow.</p>
@@ -315,6 +329,17 @@ async def sncro_enable(key: str, request: Request):
     # may have hand-wired things differently, and Claude needs to see the
     # mismatch rather than silently waiting for snapshots that never come.
     debug_flag = "true" if getattr(request.app, "debug", False) else "false"
+    # Did the user tick "Also allow screenshots" on the consent screen? This
+    # gates the get_screenshot tool relay-side and tells agent.js to offer the
+    # "Share" control. Defaults off — absent checkbox means no screen capture.
+    # Parse the urlencoded body with stdlib rather than request.form() so the
+    # middleware doesn't drag a python-multipart dependency into customer apps.
+    try:
+        body = (await request.body()).decode("utf-8", "ignore")
+        screenshots_on = urllib.parse.parse_qs(body).get("screenshots", [""])[0] == "on"
+    except Exception:
+        screenshots_on = False
+    screenshots_flag = "true" if screenshots_on else "false"
     browser_secret = ""
     try:
         req = urllib.request.Request(
@@ -324,6 +349,7 @@ async def sncro_enable(key: str, request: Request):
             headers={
                 "X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION,
                 "X-Sncro-Debug": debug_flag,
+                "X-Sncro-Screenshots": screenshots_flag,
             },
         )
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -386,6 +412,9 @@ async def sncro_enable(key: str, request: Request):
     cookie_kwargs = dict(httponly=False, secure=True, samesite="strict", max_age=1800, path="/")
     response.set_cookie(SNCRO_KEY_COOKIE, key, **cookie_kwargs)
     response.set_cookie(SNCRO_BROWSER_SECRET_COOKIE, browser_secret, **cookie_kwargs)
+    # agent.js reads this to decide whether to offer the "Share" control.
+    if screenshots_flag == "true":
+        response.set_cookie(SNCRO_SCREENSHOTS_COOKIE, "1", **cookie_kwargs)
     return response
 
 

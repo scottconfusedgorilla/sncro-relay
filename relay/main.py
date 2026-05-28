@@ -1,6 +1,7 @@
 """sncro relay — keyed long-poll rendezvous server + MCP server."""
 
 import asyncio
+import base64
 import ipaddress
 import os
 import re
@@ -16,7 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -467,6 +468,7 @@ YOUR TOOLS:
   query_all — Query all matching elements. Great for checking lists, grids, repeated components, or counting elements.
   get_js_value — Read a JavaScript runtime value by property path (e.g. "window.__NEXT_DATA__.props.pageProps"). No function calls / no eval — pure path walk. Use mode="keys" to enumerate Object.keys at a path; start with path="window" to discover globals, then drill in. Essential when the DOM looks right but state behind it is wrong.
   get_page_snapshot — High-level page overview: URL, title, viewport size, scroll position, top-level DOM structure, recent console logs and errors. Start here for orientation.
+  get_screenshot — Real pixel screenshot of the user's tab (true fonts, images, shadows, gradients). For design review and visual fidelity the DOM can't show. Only works if the user ticked "Allow screenshots" on the consent screen and clicked "Share" on the sncro badge.
   check_session — Verify connection status: "not_found", "waiting", or "connected".
   report_issue — Submit bugs, feature requests, or success stories to the sncro team. ALWAYS ask the user before submitting ANY feedback — show them the text and get explicit approval first.
   get_feedback — Read incoming feedback for this session's project (bugs, feature requests, success stories). Scoped to the project the session was created for; cannot cross projects. Use when the user asks "what feedback have we got?"
@@ -808,6 +810,56 @@ async def get_page_snapshot(key: str, secret: str) -> dict:
     call check_session first and wait for "connected" status.
     """
     return await _send_browser_request(key, secret, "get_page_snapshot", {})
+
+
+@mcp.tool()
+async def get_screenshot(key: str, secret: str, max_width: int = 1280):
+    """Capture a real pixel screenshot of the user's tab.
+
+    Unlike the DOM/style tools, this returns what the browser actually
+    painted — true fonts, cross-origin images, shadows, gradients, blend
+    modes. Use it for design review and visual-fidelity checks the DOM
+    can't answer.
+
+    Requires the user to have ticked "Allow screenshots" on the consent
+    screen AND to have clicked "Share" on the sncro badge to start the
+    screen-share (a one-time per-session browser prompt). If you get
+    SCREENSHOTS_NOT_CONSENTED, ask the user to create a new session with
+    that box checked. If you get SCREENSHOTS_NOT_STARTED, ask them to click
+    "Share" on the sncro badge in the page corner.
+
+    Args:
+        key: The sncro session key
+        secret: The session secret from create_session
+        max_width: Max image width in px; the frame is scaled down to fit (default 1280)
+    """
+    err = _check_secret(key, secret)
+    if err:
+        return err
+    if not store.screenshots_allowed(key):
+        return {
+            "error": "SCREENSHOTS_NOT_CONSENTED",
+            "message": (
+                "The user did not enable screenshots for this session. Screenshots "
+                "require ticking 'Allow screenshots' on the consent screen. Ask the user "
+                "to create a new session and check that box when they click Allow."
+            ),
+        }
+    resp = await _send_browser_request(key, secret, "get_screenshot", {"max_width": max_width})
+    if resp.get("error"):
+        return resp
+    data = resp.get("data") or {}
+    b64 = data.get("image_base64")
+    if not b64:
+        return {
+            "error": "NO_IMAGE",
+            "message": "The browser returned no image data. Ask the user to confirm screen sharing is active.",
+        }
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return {"error": "NO_IMAGE", "message": "The browser returned malformed image data."}
+    return Image(data=raw, format=data.get("format", "jpeg"))
 
 
 @mcp.tool()
@@ -1215,6 +1267,11 @@ async def enable_session(key: str, request: Request):
     debug_header = request.headers.get("x-sncro-debug", "").strip().lower()
     if debug_header in ("true", "false"):
         store.set_debug_mode(key, debug_header == "true")
+    # X-Sncro-Screenshots reports whether the user ticked "Allow screenshots"
+    # on the consent screen. Gates the get_screenshot tool. Absent header =
+    # pre-0.9.6 middleware that has no checkbox, so screenshots stay off.
+    screenshots_header = request.headers.get("x-sncro-screenshots", "").strip().lower()
+    store.set_screenshots_consent(key, screenshots_header == "true")
     return {"ok": True, "browser_secret": store.get_browser_secret(key)}
 
 

@@ -200,6 +200,24 @@ class TestEnableEndpoint:
         assert resp.status_code == 200
         assert store.get_debug_mode(KEY) is None
 
+    def test_enable_records_screenshots_consent(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable", headers={"X-Sncro-Screenshots": "true"})
+        assert resp.status_code == 200
+        assert store.screenshots_allowed(KEY) is True
+
+    def test_enable_screenshots_false_leaves_consent_off(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable", headers={"X-Sncro-Screenshots": "false"})
+        assert resp.status_code == 200
+        assert store.screenshots_allowed(KEY) is False
+
+    def test_enable_without_screenshots_header_defaults_off(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/enable")
+        assert resp.status_code == 200
+        assert store.screenshots_allowed(KEY) is False
+
 
 # --- check_session DEBUG diagnostic ---
 
@@ -246,6 +264,36 @@ class TestDebugDiagnostic:
         info = self._call_check()
         assert info["status"] == "waiting"
         assert "debug_mode" not in info
+
+
+# --- get_screenshot consent gate ---
+
+class TestScreenshotGate:
+    """get_screenshot must refuse unless the user consented on the enable screen."""
+
+    SECRET = "a" * 32
+
+    def _call_screenshot(self) -> dict:
+        import asyncio
+        from relay.main import get_screenshot as _shot
+        fn = getattr(_shot, "fn", _shot)
+        return asyncio.run(fn(KEY, self.SECRET))
+
+    def test_refuses_without_consent(self):
+        store.ensure_session(KEY, secret=self.SECRET, browser_secret=BROWSER_SECRET)
+        # No screenshots consent recorded -> tool must not even contact the browser.
+        result = self._call_screenshot()
+        assert isinstance(result, dict)
+        assert result.get("error") == "SCREENSHOTS_NOT_CONSENTED"
+
+    def test_bad_secret_rejected_before_consent(self):
+        store.ensure_session(KEY, secret=self.SECRET, browser_secret=BROWSER_SECRET)
+        store.set_screenshots_consent(KEY, True)
+        import asyncio
+        from relay.main import get_screenshot as _shot
+        fn = getattr(_shot, "fn", _shot)
+        result = asyncio.run(fn(KEY, "wrong-secret"))
+        assert "Invalid session secret" in result.get("error", "")
 
 
 # --- Contract tests (endpoint shapes) ---

@@ -20,11 +20,12 @@ from flask import Flask, request, make_response
 # Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
 # Bump this when you pull a new version from sncro-relay so the relay can
 # warn Claude (via check_session) if a customer app is running an old copy.
-SNCRO_MIDDLEWARE_VERSION = "0.9.5"
+SNCRO_MIDDLEWARE_VERSION = "0.9.6"
 
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
 SNCRO_BROWSER_SECRET_COOKIE = "sncro_browser_secret"
+SNCRO_SCREENSHOTS_COOKIE = "sncro_screenshots"
 KEY_RE = re.compile(r"^\d{9}$")
 SECRET_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -195,6 +196,10 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   .btn-deny {{ background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }}
   .btn-deny:hover {{ background: #e5e7eb; }}
   .meta {{ color: #6b7280; font-size: 0.85em; text-align: center; margin-top: 16px; line-height: 1.6; }}
+  .opt {{ display: flex; gap: 10px; align-items: flex-start; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; margin: 16px 0; text-align: left; }}
+  .opt input {{ width: 18px; height: 18px; margin-top: 2px; flex: none; cursor: pointer; }}
+  .opt label {{ font-size: 0.9em; color: #374151; line-height: 1.5; cursor: pointer; }}
+  .opt label strong {{ color: #111; }}
 </style></head>
 <body>
   <h2>Allow sncro debugging?</h2>
@@ -210,9 +215,17 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
     your console errors, and your network activity for the next 30 minutes.
   </div>
 
-  <form method="POST" action="/sncro/enable/{safe_key}/confirm" class="row">
-    <button type="submit" class="btn btn-allow">Allow</button>
-    <button type="button" class="btn btn-deny" onclick="history.back()">Cancel</button>
+  <form method="POST" action="/sncro/enable/{safe_key}/confirm">
+    <div class="opt">
+      <input type="checkbox" id="screenshots" name="screenshots" value="on">
+      <label for="screenshots"><strong>Also allow screenshots.</strong> Lets the AI capture pixel-accurate
+      images of this tab (for design and visual checks). Your browser will ask you to pick a tab to
+      share, and shows a "sharing" indicator the whole time — stop it anytime.</label>
+    </div>
+    <div class="row">
+      <button type="submit" class="btn btn-allow">Allow</button>
+      <button type="button" class="btn btn-deny" onclick="history.back()">Cancel</button>
+    </div>
   </form>
 
   <p class="meta">If you didn't expect this, just close the tab. Nothing is enabled until you click Allow.</p>
@@ -239,6 +252,9 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         # Report app.debug so the relay can warn Claude if debug is off — see
         # the equivalent note in sncro_middleware.py for why.
         debug_flag = "true" if app.debug else "false"
+        # Did the user tick "Also allow screenshots"? Gates get_screenshot
+        # relay-side and tells agent.js to offer the "Share" control.
+        screenshots_flag = "true" if request.form.get("screenshots") == "on" else "false"
         browser_secret = ""
         try:
             req = urllib.request.Request(
@@ -248,6 +264,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
                 headers={
                     "X-Sncro-Middleware-Version": SNCRO_MIDDLEWARE_VERSION,
                     "X-Sncro-Debug": debug_flag,
+                    "X-Sncro-Screenshots": screenshots_flag,
                 },
             )
             with urllib.request.urlopen(req, timeout=5) as r:
@@ -305,6 +322,9 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         cookie_kwargs = dict(httponly=False, secure=True, samesite="Strict", max_age=1800, path="/")
         resp.set_cookie(SNCRO_KEY_COOKIE, key, **cookie_kwargs)
         resp.set_cookie(SNCRO_BROWSER_SECRET_COOKIE, browser_secret, **cookie_kwargs)
+        # agent.js reads this to decide whether to offer the "Share" control.
+        if screenshots_flag == "true":
+            resp.set_cookie(SNCRO_SCREENSHOTS_COOKIE, "1", **cookie_kwargs)
         return resp
 
     @app.route("/sncro/enable/<key>/qrcode")

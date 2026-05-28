@@ -22,6 +22,9 @@
 
   const KEY = script?.getAttribute("data-key") || getCookie("sncro_key") || "";
   const BROWSER_SECRET = script?.getAttribute("data-secret") || getCookie("sncro_browser_secret") || "";
+  // The user ticked "Allow screenshots" on the consent screen. Gates whether
+  // the badge offers a "Share" control to start getDisplayMedia capture.
+  const SCREENSHOTS = getCookie("sncro_screenshots") === "1";
 
   if (!KEY || !BROWSER_SECRET) {
     // No key/secret pair — silently disabled. The relay rejects unauthenticated calls,
@@ -337,6 +340,44 @@
         errors: errors.slice(-10),
       };
     },
+
+    get_screenshot(params) {
+      if (!SCREENSHOTS) {
+        return { error: "Screenshots were not enabled for this session." };
+      }
+      if (!captureStream || !captureVideo) {
+        return {
+          error:
+            "SCREENSHOTS_NOT_STARTED — the user consented to screenshots but hasn't started sharing yet. " +
+            "Ask them to click 'Share' on the sncro badge in the corner of the page.",
+        };
+      }
+      const vw = captureVideo.videoWidth;
+      const vh = captureVideo.videoHeight;
+      if (!vw || !vh) {
+        return { error: "Screen-share stream isn't ready yet — ask the user to retry in a moment." };
+      }
+      const maxW = Math.min(Number(params.max_width) || 1280, 3840);
+      const scale = Math.min(1, maxW / vw);
+      const w = Math.max(1, Math.round(vw * scale));
+      const h = Math.max(1, Math.round(vh * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(captureVideo, 0, 0, w, h);
+      let dataUrl;
+      try {
+        dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      } catch (e) {
+        return { error: "Could not read the captured frame: " + e.message };
+      }
+      return {
+        image_base64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        format: "jpeg",
+        width: w,
+        height: h,
+      };
+    },
   };
 
   function handleRequest(request) {
@@ -377,6 +418,9 @@
   let stateEl = null;
   let dotEl = null;
   let badgeEl = null;
+  let shareEl = null;
+  let captureStream = null;
+  let captureVideo = null;
 
   function setPrimary(p) {
     if (isPrimary === p) return;
@@ -455,6 +499,60 @@
     beginElection(true);
   }
 
+  // --- Screen capture ---
+  //
+  // getDisplayMedia gives us real composited pixels — true fonts, cross-origin
+  // images, shadows, gradients — which the DOM/style tools can't. The browser
+  // requires a user gesture to start it, so the consent checkbox only enables
+  // the "Share" control on the badge; the user clicks it once, we hold the
+  // stream, and get_screenshot grabs frames silently after that.
+
+  async function startCapture() {
+    if (captureStream) return;
+    const opts = { video: { frameRate: { ideal: 2 } }, audio: false };
+    opts.preferCurrentTab = true; // Chrome/Edge: pre-selects this tab; ignored elsewhere
+    try {
+      captureStream = await navigator.mediaDevices.getDisplayMedia(opts);
+    } catch (_) {
+      captureStream = null; // user cancelled the picker or capture unsupported
+      updateShareUI();
+      return;
+    }
+    captureVideo = document.createElement("video");
+    captureVideo.muted = true;
+    captureVideo.srcObject = captureStream;
+    try {
+      await captureVideo.play();
+    } catch (_) {}
+    const track = captureStream.getVideoTracks()[0];
+    if (track) track.addEventListener("ended", stopCapture); // user clicked "Stop sharing"
+    updateShareUI();
+  }
+
+  function stopCapture() {
+    if (captureStream) {
+      captureStream.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch (_) {}
+      });
+    }
+    captureStream = null;
+    captureVideo = null;
+    updateShareUI();
+  }
+
+  function updateShareUI() {
+    if (!shareEl) return;
+    const sharing = !!captureStream;
+    shareEl.hidden = !(SCREENSHOTS && !sharing);
+    if (badgeEl) {
+      badgeEl.title = sharing
+        ? "sncro is instrumenting this window — screen sharing active"
+        : "sncro is instrumenting this window";
+    }
+  }
+
   // --- Status badge ---
   //
   // A small corner pill so every instrumented window is visibly identifiable
@@ -482,21 +580,30 @@
       '.badge.primary .state{color:#3ddc84;}' +
       '@keyframes sncro-pulse{0%{transform:scale(1);}50%{transform:scale(2.1);opacity:.35;}100%{transform:scale(1);opacity:1;}}' +
       '.dot.serving{animation:sncro-pulse .5s ease-out;}' +
+      '.share{pointer-events:auto;cursor:pointer;margin-left:4px;' +
+      'font:600 10px/1 inherit;color:#1a1a1a;background:#3ddc84;border:none;' +
+      'border-radius:9999px;padding:3px 8px;}' +
+      '.share:hover{background:#34c878;}' +
+      '.share[hidden]{display:none;}' +
       '@media (prefers-reduced-motion: reduce){' +
       '.dot.serving{animation:none;}' +
       '.badge.flash{outline:2px solid #3ddc84;outline-offset:1px;}}' +
       '</style>' +
       '<div class="badge" role="status" aria-label="sncro live debugging indicator" title="sncro is instrumenting this window">' +
       '<span class="dot"></span><span class="label">sncro</span><span class="state">standby</span>' +
+      '<button class="share" type="button" hidden aria-label="Start screen sharing so the AI can take screenshots">Share</button>' +
       '</div>';
     (document.body || document.documentElement).appendChild(host);
     badgeEl = shadow.querySelector(".badge");
     dotEl = shadow.querySelector(".dot");
     stateEl = shadow.querySelector(".state");
+    shareEl = shadow.querySelector(".share");
+    shareEl.addEventListener("click", startCapture);
     if (isPrimary) {
       badgeEl.classList.add("primary");
       stateEl.textContent = "active";
     }
+    updateShareUI();
   }
 
   function initBadge() {

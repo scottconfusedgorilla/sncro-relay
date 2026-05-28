@@ -27,6 +27,7 @@ class SessionStore:
             "closed_explicitly": False,
             "middleware_version": "",
             "debug_mode": None,
+            "screenshots": False,
             "tools_used": set(),
             "requests": deque(),
             "responses": {},
@@ -52,6 +53,16 @@ class SessionStore:
     def get_debug_mode(self, key: str):
         """Returns True, False, or None (unknown)."""
         return self._sessions.get(key, {}).get("debug_mode", None)
+
+    def set_screenshots_consent(self, key: str, allowed: bool) -> None:
+        """Record whether the user ticked 'Allow screenshots' on the consent
+        screen (reported via X-Sncro-Screenshots on the /enable call). Gates
+        the get_screenshot MCP tool — without it, no screen capture happens."""
+        if key in self._sessions:
+            self._sessions[key]["screenshots"] = allowed
+
+    def screenshots_allowed(self, key: str) -> bool:
+        return self._sessions.get(key, {}).get("screenshots", False)
 
     def close_session(self, key: str) -> bool:
         """Mark a session as explicitly closed by Claude (Finished With Engines).
