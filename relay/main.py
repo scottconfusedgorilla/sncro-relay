@@ -956,7 +956,7 @@ async def check_session(key: str, secret: str) -> dict:
 
 # Bump when we ship a new middleware version that customers should pick up.
 # Kept in relay so we don't have to redeploy the middleware repo to adjust it.
-CURRENT_MIDDLEWARE_VERSION = "0.9.5"
+CURRENT_MIDDLEWARE_VERSION = "0.9.6"
 
 
 def _middleware_version_warning(info: dict | None, reported: str) -> str:
