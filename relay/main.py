@@ -956,7 +956,7 @@ async def check_session(key: str, secret: str) -> dict:
 
 # Bump when we ship a new middleware version that customers should pick up.
 # Kept in relay so we don't have to redeploy the middleware repo to adjust it.
-CURRENT_MIDDLEWARE_VERSION = "0.9.6"
+CURRENT_MIDDLEWARE_VERSION = "0.9.7"
 
 
 def _middleware_version_warning(info: dict | None, reported: str) -> str:
@@ -1219,6 +1219,18 @@ async def post_response(key: str, payload: ResponsePayload, request: Request):
     """agent.js posts the result of a fulfilled request."""
     _require_browser_secret(key, request)
     store.add_response(key, payload.request_id, payload.model_dump())
+    return {"ok": True}
+
+
+@app.post("/session/{key}/end")
+@limiter.limit("30/minute")
+async def browser_end_session(key: str, request: Request):
+    """agent.js calls this when the user clicks Stop on the badge — the human
+    revoking access from their side. Marks the session closed so Claude's tools
+    return a clean SESSION_CLOSED signal instead of silently timing out, and so
+    every other window polling this key gets a 410 and self-cleans."""
+    _require_browser_secret(key, request)
+    store.close_session(key)
     return {"ok": True}
 
 

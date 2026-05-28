@@ -145,6 +145,26 @@ class TestResponsePosting:
         assert stored["data"]["width"] == 300
 
 
+class TestBrowserEndSession:
+    """POST /session/{key}/end — the user clicked Stop on the badge."""
+
+    def test_end_requires_browser_secret(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/end")
+        assert resp.status_code == 403
+        assert store.is_closed(KEY) is False
+
+    def test_end_closes_session(self):
+        _seed_session()
+        resp = client.post(f"/session/{KEY}/end", headers=HEADERS)
+        assert resp.status_code == 200
+        assert store.is_closed(KEY) is True
+
+    def test_end_unknown_session_404(self):
+        resp = client.post(f"/session/{KEY}/end", headers=HEADERS)
+        assert resp.status_code == 404
+
+
 # --- /session/{key}/enable (consume + return browser_secret) ---
 
 class TestEnableEndpoint:

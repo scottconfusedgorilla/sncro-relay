@@ -65,6 +65,25 @@ class TestEnableConfirmPage:
         assert 'name="screenshots"' in resp.text
         assert "Also allow screenshots" in resp.text
 
+    def test_confirm_page_warns_when_another_session_active(self):
+        # Browser already carries a different session's key -> warn it'll be replaced.
+        c = TestClient(make_app())
+        c.cookies.set("sncro_key", "200000002")
+        resp = c.get(f"/sncro/enable/{KEY}")
+        assert "already has an active sncro session" in resp.text
+        assert "200-000-002" in resp.text
+
+    def test_confirm_page_no_warning_without_existing_session(self):
+        resp = client.get(f"/sncro/enable/{KEY}")
+        assert "already has an active sncro session" not in resp.text
+
+    def test_confirm_page_no_warning_when_cookie_matches_this_key(self):
+        # Re-opening the same key's confirm page shouldn't warn about itself.
+        c = TestClient(make_app())
+        c.cookies.set("sncro_key", KEY)
+        resp = c.get(f"/sncro/enable/{KEY}")
+        assert "already has an active sncro session" not in resp.text
+
     def test_confirm_post_rejects_cross_site(self):
         # Simulate a cross-site auto-submit attack (NEW-1). Flag it via
         # Sec-Fetch-Site=cross-site; the handler must refuse.

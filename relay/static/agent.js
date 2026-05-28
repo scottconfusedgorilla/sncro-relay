@@ -420,6 +420,7 @@
   let dotEl = null;
   let badgeEl = null;
   let shareEl = null;
+  let stopEl = null;
   let captureStream = null;
   let captureVideo = null;
   let sessionEnded = false; // set when the relay reports the session is gone (410/404)
@@ -570,14 +571,24 @@
   }
 
   function updateShareUI() {
-    if (!shareEl) return;
     const sharing = !!captureStream;
-    shareEl.hidden = sessionEnded || !(SCREENSHOTS && !sharing);
+    if (shareEl) shareEl.hidden = sessionEnded || !(SCREENSHOTS && !sharing);
+    if (stopEl) stopEl.hidden = sessionEnded; // user can kill the session while it's live
     if (badgeEl) {
       badgeEl.title = sharing
         ? "sncro is instrumenting this window — screen sharing active"
         : "sncro is instrumenting this window";
     }
+  }
+
+  // User clicked "Stop" on the badge — they're revoking access from their side.
+  // Tell the relay to close the session (so Claude gets a clean closed signal),
+  // then tear down locally exactly like a relay-reported end.
+  async function userStop() {
+    try {
+      await fetch(`${RELAY}/session/${KEY}/end`, { method: "POST", headers: authHeaders() });
+    } catch (_) {}
+    endSession();
   }
 
   // Called when the relay reports the session is gone (410 closed / 404 evicted).
@@ -599,6 +610,7 @@
       badgeEl.classList.add("ended");
       if (stateEl) stateEl.textContent = "ended";
       if (shareEl) shareEl.hidden = true;
+      if (stopEl) stopEl.hidden = true;
       badgeEl.title = "sncro session ended — reload the page to start a new one";
     }
     console.info("[sncro] Session ended by the relay — agent stopped polling.");
@@ -638,6 +650,11 @@
       'border-radius:9999px;padding:3px 8px;}' +
       '.share:hover{background:#34c878;}' +
       '.share[hidden]{display:none;}' +
+      '.stop{pointer-events:auto;cursor:pointer;margin-left:4px;' +
+      'font:600 10px/1 inherit;color:#e8e8e8;background:#3a3a3a;' +
+      'border:1px solid #555;border-radius:9999px;padding:3px 8px;}' +
+      '.stop:hover{background:#e5534b;border-color:#e5534b;color:#fff;}' +
+      '.stop[hidden]{display:none;}' +
       '@media (prefers-reduced-motion: reduce){' +
       '.dot.serving{animation:none;}' +
       '.badge.flash{outline:2px solid #3ddc84;outline-offset:1px;}}' +
@@ -645,13 +662,16 @@
       '<div class="badge" role="status" aria-label="sncro live debugging indicator" title="sncro is instrumenting this window">' +
       '<span class="dot"></span><span class="label">sncro</span><span class="state">standby</span>' +
       '<button class="share" type="button" hidden aria-label="Start screen sharing so the AI can take screenshots">Share</button>' +
+      '<button class="stop" type="button" aria-label="Stop the sncro session and revoke access">Stop</button>' +
       '</div>';
     (document.body || document.documentElement).appendChild(host);
     badgeEl = shadow.querySelector(".badge");
     dotEl = shadow.querySelector(".dot");
     stateEl = shadow.querySelector(".state");
     shareEl = shadow.querySelector(".share");
+    stopEl = shadow.querySelector(".stop");
     shareEl.addEventListener("click", startCapture);
+    stopEl.addEventListener("click", userStop);
     if (isPrimary) {
       badgeEl.classList.add("primary");
       stateEl.textContent = "active";

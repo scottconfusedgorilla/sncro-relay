@@ -20,7 +20,7 @@ from flask import Flask, request, make_response
 # Announced to the relay via X-Sncro-Middleware-Version on /enable calls.
 # Bump this when you pull a new version from sncro-relay so the relay can
 # warn Claude (via check_session) if a customer app is running an old copy.
-SNCRO_MIDDLEWARE_VERSION = "0.9.6"
+SNCRO_MIDDLEWARE_VERSION = "0.9.7"
 
 # Cookies are read by agent.js (must be non-httponly) and only flow same-site.
 SNCRO_KEY_COOKIE = "sncro_key"
@@ -179,6 +179,22 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
         display = f"{key[0:3]}-{key[3:6]}-{key[6:9]}"
         host = _html.escape(request.host or "this site", quote=True)
         safe_key = _html.escape(key, quote=True)
+
+        # Warn if this browser already has a session for this origin — a
+        # browser/origin hosts one session at a time (single cookie), so a new
+        # enable replaces the old one. Without this the second session silently
+        # never connects.
+        existing = request.cookies.get(SNCRO_KEY_COOKIE, "")
+        active_block = ""
+        if existing and existing != key and _key_is_valid(existing):
+            ex_display = _html.escape(f"{existing[0:3]}-{existing[3:6]}-{existing[6:9]}", quote=True)
+            active_block = f"""
+  <div class="active">
+    <strong>This browser already has an active sncro session ({ex_display}).</strong>
+    Allowing this one <strong>replaces it</strong> — the previous session, and whatever
+    AI is using it, will stop receiving data. Continue only if you mean to switch.
+  </div>"""
+
         return _secure_html(f"""<!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>sncro — allow access?</title>
 <style>
@@ -189,6 +205,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
   .panel {{ background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 20px 0; }}
   .code {{ font-family: monospace; font-size: 1.6em; font-weight: 700; letter-spacing: 0.05em; text-align: center; color: #111; }}
   .warn {{ color: #92400e; background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 6px; margin: 16px 0; font-size: 0.9em; line-height: 1.5; }}
+  .active {{ color: #991b1b; background: #fee2e2; border-left: 4px solid #dc2626; padding: 12px 16px; border-radius: 6px; margin: 16px 0; font-size: 0.9em; line-height: 1.5; }}
   .row {{ display: flex; gap: 12px; justify-content: center; margin-top: 24px; }}
   .btn {{ padding: 12px 24px; font-size: 1em; border-radius: 8px; cursor: pointer; border: none; }}
   .btn-allow {{ background: #16a34a; color: white; }}
@@ -204,7 +221,7 @@ def init_sncro(app: Flask, relay_url: str = "https://relay.sncro.net"):
 <body>
   <h2>Allow sncro debugging?</h2>
   <p class="lead">An AI assistant is asking to inspect this browser on <strong>{host}</strong>.</p>
-
+{active_block}
   <div class="panel">
     <div class="code">{display}</div>
   </div>
